@@ -7,6 +7,7 @@ use CommunitySDKs\Client;
 use CommunitySDKs\Exception\{ApiException, SdkException, ValidationException};
 use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, Request, Response, Upload};
 use CommunitySDKs\OpenApi\Registry;
+use CommunitySDKs\Security\OAuthTokenProvider;
 use CommunitySDKs\OpenApi\Document;
 use PHPUnit\Framework\TestCase;
 
@@ -280,6 +281,36 @@ final class ClientTest extends TestCase
 
         self::assertSame('https://example.test/items?filter=%7B%22active%22%3Atrue%7D', $transport->lastRequest->url);
         self::assertSame('daily report', $transport->lastRequest->headers['X-Label']);
+    }
+
+    public function testOAuthProviderReceivesRequestedScopes(): void
+    {
+        $transport = new FakeTransport();
+        $provider = new class implements OAuthTokenProvider {
+            public string $schemeName = '';
+            /** @var list<string> */
+            public array $scopes = [];
+            public function accessToken(string $schemeName, array $scopes): string
+            {
+                $this->schemeName = $schemeName;
+                $this->scopes = $scopes;
+                return 'fresh-access-token';
+            }
+        };
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'security' => [['oauth' => ['items:read', 'profile:read']]],
+            'components' => ['securitySchemes' => ['oauth' => ['type' => 'oauth2', 'flows' => [
+                'clientCredentials' => ['tokenUrl' => 'https://auth.example.test/token', 'scopes' => ['items:read' => 'Read items', 'profile:read' => 'Read profile']],
+            ]]]],
+            'paths' => ['/secure' => ['get' => ['operationId' => 'secure', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport, oauthTokenProvider: $provider);
+
+        $sdk->secure();
+
+        self::assertSame('oauth', $provider->schemeName);
+        self::assertSame(['items:read', 'profile:read'], $provider->scopes);
+        self::assertSame('Bearer fresh-access-token', $transport->lastRequest->headers['Authorization']);
     }
 
     public function testPaginationRejectsCrossOriginNextLink(): void

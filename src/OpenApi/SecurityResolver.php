@@ -5,13 +5,14 @@ namespace CommunitySDKs\OpenApi;
 
 use CommunitySDKs\Exception\SdkException;
 use CommunitySDKs\Exception\ValidationException;
+use CommunitySDKs\Security\OAuthTokenProvider;
 
 final readonly class SecurityResolver
 {
     public function __construct(private Document $document) {}
 
     /** @param array<string,mixed> $operation @param array<string,string> $credentials @param array<string,string> $headers @param list<string> $query @param list<string> $cookies */
-    public function apply(array $operation, ?string $token, array $credentials, array &$headers, array &$query, array &$cookies): void
+    public function apply(array $operation, ?string $token, array $credentials, array &$headers, array &$query, array &$cookies, ?OAuthTokenProvider $tokenProvider = null): void
     {
         $requirements = array_key_exists('security', $operation)
             ? $operation['security']
@@ -35,6 +36,12 @@ final readonly class SecurityResolver
                 if (!is_array($schemeNode)) throw new SdkException("Unknown security scheme: {$name}");
                 $scheme = $this->document->resolve($schemeNode);
                 $credential = $credentials[$name] ?? null;
+                if ($credential === null && in_array($scheme['type'] ?? '', ['oauth2', 'openIdConnect'], true) && $tokenProvider !== null) {
+                    if (!is_array($scopes) || array_filter($scopes, static fn (mixed $scope): bool => !is_string($scope)) !== []) {
+                        throw new SdkException("Invalid OAuth scopes for security scheme {$name}.");
+                    }
+                    $credential = $tokenProvider->accessToken($name, array_values($scopes));
+                }
                 if ($credential === null && in_array($scheme['type'] ?? '', ['http', 'oauth2', 'openIdConnect'], true)) {
                     $credential = $token;
                 }

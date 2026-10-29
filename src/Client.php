@@ -8,6 +8,7 @@ use CommunitySDKs\Exception\SdkException;
 use CommunitySDKs\Exception\ValidationException;
 use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, Request, Result, Response, RetryingTransport, StreamTransport, StreamingTransport, Transport};
 use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, RequestBodySerializer, SecurityResolver, Validator};
+use CommunitySDKs\Security\OAuthTokenProvider;
 
 /** Universal operationId client. No endpoint-specific PHP classes are created. */
 readonly class Client
@@ -36,6 +37,7 @@ readonly class Client
         int $maxRetries = 0,
         /** @var list<string> exact lowercased or case-insensitive allowed hostnames */
         private array $allowedHosts = [],
+        private ?OAuthTokenProvider $oauthTokenProvider = null,
     ) {
         $this->registry = new Registry($document);
         $this->validator = new Validator($document);
@@ -66,9 +68,9 @@ readonly class Client
 
     /** @param array<string,string> $credentials */
     /** @param array<string,string> $credentials @param list<HttpMiddleware> $middleware @param list<string> $allowedHosts */
-    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0, array $allowedHosts = []): self
+    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0, array $allowedHosts = [], ?OAuthTokenProvider $oauthTokenProvider = null): self
     {
-        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries, allowedHosts: $allowedHosts);
+        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries, allowedHosts: $allowedHosts, oauthTokenProvider: $oauthTokenProvider);
     }
 
     public function operations(): Registry { return $this->registry; }
@@ -151,7 +153,7 @@ readonly class Client
         }
         $unknown = array_diff(array_keys($arguments), array_keys($used));
         if ($unknown !== []) throw new ValidationException(['Unknown arguments: '.implode(', ', $unknown)]);
-        $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies);
+        $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies, $this->oauthTokenProvider);
         $this->mergeCookies($headers, $cookies);
         $url = $this->baseUrl.'/'.ltrim($path, '/');
         if ($query !== []) $url .= '?'.implode('&', $query);
@@ -273,7 +275,7 @@ readonly class Client
                 if ($parameter['in'] === 'header') $headers[$name] = $this->parameterSerializer->header($parameter, $arguments[$name]);
             }
             $query = $cookies = [];
-            $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies);
+            $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies, $this->oauthTokenProvider);
             if ($query !== []) $url = $this->appendSecurityQuery($url, $query);
             $this->mergeCookies($headers, $cookies);
             $currentUrl = $url;
