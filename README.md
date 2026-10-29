@@ -80,16 +80,21 @@ $client = new Client(
 );
 ```
 
-`Client::fromFile()` provides a shortcut and supports a custom `Transport`. Build an adapter implementing `CommunitySDKs\Http\Transport` to plug in a PSR-18 or other HTTP client. For OpenAPI API-key schemes, pass credentials by scheme name with `credentials: ['apiKeyAuth' => '...']`; the SDK supports API keys in headers, query strings, and cookies, HTTP Basic/Bearer, and caller-supplied OAuth access tokens. It does not perform OAuth authorization or refresh flows.
+`Client::fromFile()` provides a shortcut and supports a custom `Transport`. Build an adapter implementing `CommunitySDKs\Http\Transport` to plug in a PSR-18 or other HTTP client. For OpenAPI API-key schemes, pass credentials by scheme name with `credentials: ['apiKeyAuth' => '...']`; the SDK supports API keys in headers, query strings, and cookies, HTTP Basic/Bearer, and caller-supplied OAuth access tokens. `OAuthTokenProvider` receives the scheme name and required scopes, so applications can retrieve or refresh tokens using their own OAuth library.
 
 ### Uploads, pagination and streaming
 
 ```php
-use CommunitySDKs\Http\{RateLimitMiddleware, Upload};
+use CommunitySDKs\Http\{MetricsMiddleware, RateLimitMiddleware, Upload};
 
 $client = new Client(
     document: Document::fromFile('specs/api.openapi.json'),
-    middleware: [new RateLimitMiddleware(0.25)],
+    middleware: [
+        new RateLimitMiddleware(0.25),
+        new MetricsMiddleware(static function ($request, $response, float $seconds, $error): void {
+            // Send request outcome and duration to the application's metrics backend.
+        }),
+    ],
     maxRetries: 2, // retries idempotent methods only
 );
 
@@ -101,12 +106,13 @@ foreach ($client->paginate('listItems', ['limit' => 100]) as $page) {
 }
 
 $client->download('downloadFile', __DIR__.'/download.bin', ['id' => 42]);
+$client->downloadResumable('largeFile', __DIR__.'/large.bin', ['id' => 42]);
 $client->streamEvents('watchEvents', static function (array $event): void {
     echo $event['data'];
 });
 ```
 
-Retries are disabled by default, apply only to idempotent operations, and honor capped exponential delay plus `Retry-After`. Pagination follows RFC-style `Link` next relations and rejects cross-origin links. Downloads write to a temporary file and atomically move it into place after a successful response. Downloads and SSE require a `StreamingTransport`; the built-in `StreamTransport` implements it.
+Retries are disabled by default, apply only to idempotent operations, and honor capped exponential delay plus `Retry-After`. Pagination follows RFC-style `Link` next relations and rejects cross-origin links. Downloads write to a temporary file and atomically move it into place after a successful response. Resumable downloads issue bounded byte ranges, verify `Content-Range`, and use ETags when available. Downloads and SSE require a `StreamingTransport`; the built-in `StreamTransport` implements it. Multipart responses are returned as `MultipartPart` values; JSON parts are decoded and binary parts retain raw bytes.
 
 ### Request, response and exceptions
 
@@ -148,9 +154,10 @@ vendor/bin/community-sdk list specs/jsonplaceholder.openapi.json post
 vendor/bin/community-sdk describe specs/jsonplaceholder.openapi.json getPost
 vendor/bin/community-sdk docs specs/jsonplaceholder.openapi.json > API.md
 vendor/bin/community-sdk ide specs/jsonplaceholder.openapi.json > CommunitySdkIdeClient.php
+vendor/bin/community-sdk dto specs/jsonplaceholder.openapi.json > ApiDtos.php
 ```
 
-The `ide` command emits a **PHPDoc-only subclass** of `Client`: there is still just one runtime implementation. Use that class in an application only after loading it and checking signatures. It includes nested array shapes, nullable and union types, and response-data generics; recursive or unsupported models fall back to `array<string, mixed>` or `mixed`. These are still hints, not compile-time request/response validation. `docs` emits human/AI-readable Markdown. You can put the generated API.md in your coding assistant's project context.
+The `ide` command emits a **PHPDoc-only subclass** of `Client`: there is still just one runtime implementation. Use that class in an application only after loading it and checking signatures. It includes nested array shapes, nullable and union types, and response-data generics; recursive or unsupported models fall back to `array<string, mixed>` or `mixed`. The optional `dto` command emits strict readonly DTO classes for object schemas; the DTOs preserve OpenAPI property names through `JsonSerializable` and do not add generic hydration. `docs` emits human/AI-readable Markdown. You can put the generated API.md in your coding assistant's project context.
 
 **Important:** do not include a generated IDE class with the same name twice in one app, and do not ship generated files as part of this core package. The example `Client` class remains the recommended production entry point.
 
@@ -176,42 +183,43 @@ All runtime operations use one `Client`, regardless of how many OpenAPI paths ex
 
 - OpenAPI 3.x JSON and YAML **local files**
 - local `#/...` references, including recursive schemas; external references are rejected
+- document, path-item, and operation-level servers, server variable defaults/overrides, and optional exact-host allowlists
 - HTTP GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS/TRACE operation registry
 - `operationId` naming (fallback generated from verb + path)
 - PHP magic `__call` and explicit `call()`
-- path, query, header and cookie parameters; `simple`, `label`, `matrix`, `form`, `spaceDelimited`, `pipeDelimited`, and `deepObject` serialization where defined by OpenAPI
+- path, query, header and cookie parameters; `simple`, `label`, `matrix`, `form`, `spaceDelimited`, `pipeDelimited`, and `deepObject` serialization where defined by OpenAPI; JSON and text `Parameter Object.content`
 - JSON, URL-encoded, multipart, and binary request bodies; `Upload` values and explicit file helpers
-- JSON response decoding, status-specific response schemas, response validation
+- JSON and multipart response decoding, status-specific response schemas, response validation
 - JSON Schema 2020-12 validation through Opis, including recursive references, `not`, dependent schemas, formats, and `unevaluatedProperties`; OpenAPI 3.0 `nullable` and referenced `oneOf` discriminators are adapted
 - HTTP error payload/status preservation, transport exceptions
-- OpenAPI security inheritance and alternatives, API keys, HTTP Basic/Bearer, and caller-provided OAuth tokens
-- optional same-origin Link pagination, chunked downloads, SSE, idempotent retries, rate limiting, middleware, custom transport injection
-- introspection, Markdown docs, nested PHPStan/PHPDoc IDE hints
+- OpenAPI security inheritance and alternatives, API keys, HTTP Basic/Bearer, and scope-aware OAuth token-provider hooks
+- optional same-origin Link pagination, chunked and resumable range downloads, SSE, idempotent retries, rate limiting, request metrics, middleware, custom transport injection
+- introspection, Markdown docs, nested PHPStan/PHPDoc IDE hints, optional strict DTO generation
 - deterministic tests with a fake transport, GitHub Actions
 
 ## Limitations
 
 **This is a deliberately scoped v0.1.0, not an OpenAPI conformance-certified SDK.** In particular:
 
-1. Supported OpenAPI and JSON Schema behavior is not complete conformance. Server variables, parameter `content`, every serialization edge case, callbacks, webhooks, and all OpenAPI 3.1 interactions are not implemented.
-2. OAuth tokens are supplied by the caller; authorization-code flows, scope grants, refresh, API-key rotation, and credential stores are not implemented. Security validation must not be treated as authorization policy.
+1. Supported OpenAPI and JSON Schema behavior is not complete conformance. Server URL templates are supported, but relative servers, callbacks, webhooks, `allowEmptyValue`, and every serialization edge case are not implemented.
+2. OAuth tokens are supplied by the caller's provider; authorization-code/client-credentials exchanges, scope enforcement, API-key rotation, and credential stores are not implemented. Security validation must not be treated as authorization policy.
 3. External `$ref` is rejected. OpenAPI discriminator adaptation supports referenced `oneOf` variants, not every discriminator shape. JSON Schema validation is runtime validation, not a security boundary; validate untrusted input separately and test custom formats/keywords.
-4. JSON media types decode to PHP values and other content types remain raw strings. SSE parsing is basic, downloads are file-based, multipart responses and resumable/range downloads are not supported.
+4. JSON and multipart media types decode to PHP values and parts; other content types remain raw strings. SSE parsing is basic. Range downloads require a server that returns valid byte ranges and stable ETags for safe resume.
 5. Pagination supports `Link` next relations only, and follows same-origin links only. It does not infer cursor/page parameters or deduplicate items.
-6. Retry defaults to off and only retries idempotent HTTP methods. No retry budget coordination, circuit breaker, distributed rate limit, telemetry, or token refresh is included.
+6. Retry defaults to off and only retries idempotent HTTP methods. Metrics are callback-based. No retry budget coordination, circuit breaker, distributed rate limit, or built-in token refresh is included.
 7. Built-in redirects are disabled. Specs are loaded from local files only. Base URLs must be trusted and allow-listed by applications that accept user-controlled configuration; syntax checks alone do not prevent SSRF.
-8. IDE hints provide PHPDoc types and array shapes, not generated DTOs or compile-time validation. Complex recursive models intentionally fall back to generic array/mixed types.
-9. JSONPlaceholder's sample specification is manually maintained and may not cover all real responses.
+8. DTO generation covers object component schemas with strict constructors and JSON serialization, not generic hydration or all schema compositions. IDE hints remain PHPDoc, not compile-time validation; complex recursive models can still fall back to generic array/mixed types.
+9. Portable parameter fixtures are included, but this repository has no other SDK runtime to consume them. JSONPlaceholder's sample specification is manually maintained and may not cover all real responses.
 
 **Security:** never execute arbitrary remote specs as PHP, and don't allow untrusted users to choose API `baseUrl` or arbitrary target domains in your server application. The built-in transport disables HTTP redirects; test security boundaries before using a custom transport.
 
 ## Roadmap
 
 1. Broader OpenAPI 3.0 and 3.1 conformance and serialization edge-case coverage.
-2. OAuth flows, scope handling, auth-aware errors, and credential refresh integrations.
-3. Multipart response support, resumable downloads, and middleware observability.
-4. Optional DTO generation and more precise recursive model types.
-5. Expand the portable serialization fixtures for other runtimes in the Community SDKs ecosystem.
+2. Optional OAuth flow adapters, scope enforcement, and auth-aware errors.
+3. Advanced pagination strategies and richer transport observability.
+4. More precise recursive DTO model generation.
+5. Consume the portable fixtures in other runtimes in the Community SDKs ecosystem.
 
 No generated SDK packages are in scope.
 
