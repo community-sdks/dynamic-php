@@ -256,6 +256,16 @@ final class ClientTest extends TestCase
         $sdk->getProblem();
     }
 
+    public function testBaseUrlAllowlistRejectsUnapprovedHosts(): void
+    {
+        $document = new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://api.example.test']], 'paths' => [],
+        ]);
+
+        $this->expectException(SdkException::class);
+        new Client($document, baseUrl: 'https://attacker.example.test', allowedHosts: ['api.example.test']);
+    }
+
     public function testPaginationRejectsCrossOriginNextLink(): void
     {
         $transport = new FakeTransport(new Response(200, ['Link' => '<https://other.example.test/items?page=2>; rel="next"'], '[]'));

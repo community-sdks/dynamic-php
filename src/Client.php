@@ -34,6 +34,8 @@ readonly class Client
         /** @var list<HttpMiddleware> */
         array $middleware = [],
         int $maxRetries = 0,
+        /** @var list<string> exact lowercased or case-insensitive allowed hostnames */
+        private array $allowedHosts = [],
     ) {
         $this->registry = new Registry($document);
         $this->validator = new Validator($document);
@@ -55,15 +57,18 @@ readonly class Client
             || preg_match('/[\x00-\x20\\\\]/', $server)) {
             throw new SdkException('Base URL must not contain credentials, query, fragment, whitespace, or invalid characters.');
         }
+        if ($allowedHosts !== [] && !in_array(strtolower($serverParts['host']), array_map('strtolower', $allowedHosts), true)) {
+            throw new SdkException('Base URL host is not in the configured allowlist.');
+        }
         if ($maxRetries < 0) throw new \InvalidArgumentException('maxRetries must be non-negative.');
         $this->baseUrl = rtrim($server, '/');
     }
 
     /** @param array<string,string> $credentials */
-    /** @param array<string,string> $credentials @param list<HttpMiddleware> $middleware */
-    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0): self
+    /** @param array<string,string> $credentials @param list<HttpMiddleware> $middleware @param list<string> $allowedHosts */
+    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0, array $allowedHosts = []): self
     {
-        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries);
+        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries, allowedHosts: $allowedHosts);
     }
 
     public function operations(): Registry { return $this->registry; }
