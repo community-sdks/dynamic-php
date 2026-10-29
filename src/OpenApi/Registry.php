@@ -9,25 +9,40 @@ final readonly class Registry
 {
     /** @var array<string,array<string,mixed>> */
     private array $operations;
+    /** @var array<string,?string> */
+    private array $operationSources;
+    /** @var array<string,array<string,?string>> */
+    private array $parameterSources;
 
     public function __construct(private Document $document)
     {
         $operations = [];
+        $operationSources = [];
+        $parameterSources = [];
         foreach ($document->data['paths'] as $path => $pathItem) {
-            $pathItem = $document->resolve($pathItem);
+            $resolvedPathItem = $document->resolveWithSource($pathItem);
+            $pathItem = $resolvedPathItem['value'];
             foreach (['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace'] as $verb) {
                 if (!isset($pathItem[$verb])) {
                     continue;
                 }
-                $operation = $pathItem[$verb];
+                $resolvedOperation = $document->resolveWithSource($pathItem[$verb], $resolvedPathItem['sourcePath']);
+                $operation = $resolvedOperation['value'];
+                $operationSource = $resolvedOperation['sourcePath'];
                 $id = $operation['operationId'] ?? $this->fallbackName($verb, $path);
                 if (isset($operations[$id])) {
                     throw new SdkException("Duplicate operationId: {$id}");
                 }
                 $parameters = [];
-                foreach (array_merge($pathItem['parameters'] ?? [], $operation['parameters'] ?? []) as $parameter) {
-                    $parameter = $document->resolve($parameter);
-                    $parameters[$parameter['in'].':'.$parameter['name']] = $parameter;
+                $sources = [];
+                foreach ([[$pathItem['parameters'] ?? [], $resolvedPathItem['sourcePath']], [$operation['parameters'] ?? [], $operationSource]] as [$parameterList, $parameterSource]) {
+                    foreach ($parameterList as $parameter) {
+                        $resolvedParameter = $document->resolveWithSource($parameter, $parameterSource);
+                        $parameter = $resolvedParameter['value'];
+                        $key = $parameter['in'].':'.$parameter['name'];
+                        $parameters[$key] = $parameter;
+                        $sources[$key] = $resolvedParameter['sourcePath'];
+                    }
                 }
                 $operations[$id] = $operation + [
                     'operationId' => $id,
@@ -36,9 +51,13 @@ final readonly class Registry
                 $operations[$id]['_path'] = $path;
                 $operations[$id]['_parameters'] = array_values($parameters);
                 $operations[$id]['_servers'] = $operation['servers'] ?? $pathItem['servers'] ?? $document->data['servers'] ?? [];
+                $operationSources[$id] = $operationSource;
+                $parameterSources[$id] = $sources;
             }
         }
         $this->operations = $operations;
+        $this->operationSources = $operationSources;
+        $this->parameterSources = $parameterSources;
     }
 
     private function fallbackName(string $verb, string $path): string
@@ -51,6 +70,18 @@ final readonly class Registry
     public function get(string $operationId): array
     {
         return $this->operations[$operationId] ?? throw new SdkException("Unknown operation: {$operationId}");
+    }
+
+    public function sourcePath(string $operationId): ?string
+    {
+        $this->get($operationId);
+        return $this->operationSources[$operationId] ?? null;
+    }
+
+    public function parameterSourcePath(string $operationId, string $place, string $name): ?string
+    {
+        $this->get($operationId);
+        return $this->parameterSources[$operationId][$place.':'.$name] ?? null;
     }
 
     /** @return array<string,array<string,mixed>> */

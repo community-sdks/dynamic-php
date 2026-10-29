@@ -1,0 +1,21 @@
+{
+  "components": {
+    "requestBodies": {
+      "envelope": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/EnvelopeInput"}
+          }
+        }
+      }
+    },
+    "schemas": {
+      "EnvelopeInput": {
+        "type": "object",
+        "required": ["node"],
+        "properties": {"node": {"$ref": "recursive.json#/components/schemas/Node"}}
+      }
+    }
+  }
+}

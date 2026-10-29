@@ -1,0 +1,12 @@
+{
+  "components": {
+    "parameters": {
+      "node": {
+        "name": "node",
+        "in": "query",
+        "required": true,
+        "schema": {"$ref": "recursive.json#/components/schemas/Node"}
+      }
+    }
+  }
+}

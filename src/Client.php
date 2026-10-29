@@ -146,6 +146,7 @@ readonly class Client
     private function buildRequest(string $operationId, array $arguments): array
     {
         $op = $this->registry->get($operationId);
+        $op['_sourcePath'] = $this->registry->sourcePath($operationId);
         $path = $op['_path'];
         $query = [];
         $cookies = [];
@@ -167,7 +168,7 @@ readonly class Client
                 $content = $parameter['content'];
                 $media = is_array($content) ? reset($content) : null;
                 $schema = is_array($media) ? ($media['schema'] ?? []) : [];
-                if ($schema !== []) $this->validator->assert($value, $schema, '$.'.$name);
+                if ($schema !== []) $this->validator->assert($value, $schema, '$.'.$name, $this->registry->parameterSourcePath($operationId, $place, $name));
                 $serialized = $this->parameterSerializer->contentValue($parameter, $value);
                 if ($place === 'path') {
                     $path = str_replace('{'.$name.'}', rawurlencode($serialized), $path);
@@ -179,7 +180,14 @@ readonly class Client
                     $cookies[] = $this->parameterSerializer->contentCookie($name, $serialized);
                 }
             } else {
-                if (isset($parameter['schema'])) $this->validator->assert($value, $parameter['schema'], '$.'.$name);
+                if (isset($parameter['schema'])) {
+                    $this->validator->assert(
+                        $value,
+                        $parameter['schema'],
+                        '$.'.$name,
+                        $this->registry->parameterSourcePath($operationId, $place, $name),
+                    );
+                }
                 if ($place === 'path') {
                     $path = str_replace('{'.$name.'}', $this->parameterSerializer->path($parameter, $value), $path);
                 } elseif ($place === 'query') {
@@ -194,7 +202,8 @@ readonly class Client
         if (str_contains($path, '{')) throw new SdkException('Unresolved path parameter.');
         $body = '';
         if (isset($op['requestBody'])) {
-            $requestBody = $this->document->resolve($op['requestBody']);
+            $resolvedBody = $this->document->resolveWithSource($op['requestBody'], $op['_sourcePath']);
+            $requestBody = $resolvedBody['value'];
             $hasBody = array_key_exists('body', $arguments);
             if (!$hasBody && ($requestBody['required'] ?? false)) throw new ValidationException(['body: required']);
             if ($hasBody) {
@@ -202,7 +211,7 @@ readonly class Client
                 $contentTypes = $requestBody['content'] ?? [];
                 $mediaType = $this->requestBodySerializer->selectMediaType($contentTypes, $arguments['body']);
                 $media = $contentTypes[$mediaType];
-                $this->validator->assert($arguments['body'], $media['schema'] ?? [], '$.body');
+                $this->validator->assert($arguments['body'], $media['schema'] ?? [], '$.body', $resolvedBody['sourcePath']);
                 $serialized = $this->requestBodySerializer->serialize($arguments['body'], $mediaType, $media);
                 $body = $serialized['body'];
                 $headers['Content-Type'] = $serialized['contentType'];
@@ -482,7 +491,7 @@ readonly class Client
         $decoded = $this->decode($response);
         $schema = $this->responseSchema($operation, $response);
         if ($this->validateResponses && $schema !== null && $decoded !== null) {
-            $this->validator->assert($decoded, $schema, '$.response');
+            $this->validator->assert($decoded, $schema['schema'], '$.response', $schema['sourcePath']);
         }
         if ($response->status >= 400) {
             throw new ApiException($response->status, $decoded, $response->headers, $response->body);
@@ -601,21 +610,27 @@ readonly class Client
         return $response->body;
     }
 
-    /** @param array<string,mixed> $operation @return array<string,mixed>|null */
+    /** @param array<string,mixed> $operation @return array{schema:array<string,mixed>,sourcePath:?string}|null */
     private function responseSchema(array $operation, Response $response): ?array
     {
         $responses = $operation['responses'] ?? [];
         $status = (string)$response->status;
         $entry = $responses[$status] ?? $responses[substr($status, 0, 1).'XX'] ?? $responses['default'] ?? null;
         if ($entry === null) return null;
-        $entry = $this->document->resolve($entry);
+        $resolvedEntry = $this->document->resolveWithSource($entry, $operation['_sourcePath'] ?? null);
+        $entry = $resolvedEntry['value'];
         $type = $response->contentType();
         $content = $entry['content'] ?? [];
-        if ($type === '') return $content['application/json']['schema'] ?? null;
-        if (isset($content[$type]['schema'])) return $content[$type]['schema'];
+        if ($type === '') {
+            $schema = $content['application/json']['schema'] ?? null;
+            return is_array($schema) ? ['schema' => $schema, 'sourcePath' => $resolvedEntry['sourcePath']] : null;
+        }
+        if (isset($content[$type]['schema']) && is_array($content[$type]['schema'])) {
+            return ['schema' => $content[$type]['schema'], 'sourcePath' => $resolvedEntry['sourcePath']];
+        }
         foreach ($content as $mediaType => $media) {
             if (is_string($mediaType) && is_array($media) && isset($media['schema']) && $this->mediaTypeMatches($mediaType, $type)) {
-                return $media['schema'];
+                return is_array($media['schema']) ? ['schema' => $media['schema'], 'sourcePath' => $resolvedEntry['sourcePath']] : null;
             }
         }
         return null;

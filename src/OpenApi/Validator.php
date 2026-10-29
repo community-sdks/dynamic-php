@@ -19,9 +19,9 @@ final readonly class Validator
     }
 
     /** @param array<string,mixed> $schema */
-    public function assert(mixed $value, array $schema, string $location = '$'): void
+    public function assert(mixed $value, array $schema, string $location = '$', ?string $sourcePath = null): void
     {
-        $sourcePath = $this->document->sourcePath();
+        $sourcePath ??= $this->document->sourcePath();
         $this->assertLocalReferences($schema, sourcePath: $sourcePath);
         $normalizedSchema = $this->normalizeSchema($schema, sourcePath: $sourcePath);
         $schema = $this->toOpisValue($normalizedSchema, 'schema');

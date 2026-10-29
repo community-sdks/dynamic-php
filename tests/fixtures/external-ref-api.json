@@ -16,6 +16,20 @@
           }
         }
       }
+    },
+    "/parameter": {
+      "get": {
+        "operationId": "getByNode",
+        "parameters": [{"$ref": "schemas/parameters.json#/components/parameters/node"}],
+        "responses": {"200": {"description": "ok"}}
+      }
+    },
+    "/submit": {
+      "post": {
+        "operationId": "submitEnvelope",
+        "requestBody": {"$ref": "schemas/request-bodies.json#/components/requestBodies/envelope"},
+        "responses": {"200": {"description": "ok"}}
+      }
     }
   },
   "components": {"schemas": {}}

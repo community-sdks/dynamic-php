@@ -480,6 +480,26 @@ final class ClientTest extends TestCase
         $sdk->getEnvelope();
     }
 
+    public function testNestedExternalRequestBodyReferencesResolveRelativeToTheirFile(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = Client::fromFile(__DIR__.'/fixtures/external-ref-api.json', transport: $transport);
+
+        $sdk->submitEnvelope(body: ['node' => ['value' => 'ok']]);
+
+        self::assertSame('{"node":{"value":"ok"}}', $transport->lastRequest->body);
+    }
+
+    public function testExternalParameterAndSiblingSchemaReferencesResolveRelativeToTheirFiles(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = Client::fromFile(__DIR__.'/fixtures/external-ref-api.json', transport: $transport);
+
+        $sdk->getByNode(node: ['value' => 'ok']);
+
+        self::assertSame('https://example.test/parameter?value=ok', $transport->lastRequest->url);
+    }
+
     public function testServerVariableDefaultsOverridesAndOperationServerPrecedence(): void
     {
         $transport = new FakeTransport();

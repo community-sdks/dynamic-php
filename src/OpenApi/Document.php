@@ -133,8 +133,14 @@ final class Document
     /** @return array<string,mixed> */
     public function resolve(array $node, int $depth = 0, ?string $sourcePath = null): array
     {
+        return $this->resolveWithSource($node, $sourcePath, $depth)['value'];
+    }
+
+    /** @param array<string,mixed> $node @return array{value:array<string,mixed>,sourcePath:?string} */
+    public function resolveWithSource(array $node, ?string $sourcePath = null, int $depth = 0): array
+    {
         if (!isset($node['$ref'])) {
-            return $node;
+            return ['value' => $node, 'sourcePath' => $sourcePath ?? $this->sourcePath];
         }
         if ($depth > 32) {
             throw new SdkException('Reference depth exceeded (possible reference cycle).');
@@ -142,6 +148,10 @@ final class Document
         $ref = $node['$ref'];
         if (!is_string($ref)) throw new SdkException('Invalid $ref value.');
         $resolved = $this->resolveReference($ref, $sourcePath);
-        return $this->resolve(array_replace($resolved['value'], array_diff_key($node, ['$ref' => true])), $depth + 1, $resolved['sourcePath']);
+        return $this->resolveWithSource(
+            array_replace($resolved['value'], array_diff_key($node, ['$ref' => true])),
+            $resolved['sourcePath'],
+            $depth + 1,
+        );
     }
 }
