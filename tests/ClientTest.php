@@ -5,7 +5,7 @@ namespace CommunitySDKs\Tests;
 
 use CommunitySDKs\Client;
 use CommunitySDKs\Exception\{ApiException, SdkException, ValidationException};
-use CommunitySDKs\Http\Response;
+use CommunitySDKs\Http\{Response, Upload};
 use CommunitySDKs\OpenApi\Document;
 use PHPUnit\Framework\TestCase;
 
@@ -25,6 +25,20 @@ final class ClientTest extends TestCase
             'paths' => [$path => ['get' => [
                 'operationId' => 'inspect',
                 'parameters' => $parameters,
+                'responses' => ['200' => ['description' => 'ok']],
+            ]]],
+        ]), transport: $transport);
+    }
+
+    /** @param array<string,mixed> $requestBody */
+    private function bodySdk(FakeTransport $transport, array $requestBody): Client
+    {
+        return new Client(new Document([
+            'openapi' => '3.1.0',
+            'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/upload' => ['post' => [
+                'operationId' => 'sendBody',
+                'requestBody' => $requestBody,
                 'responses' => ['200' => ['description' => 'ok']],
             ]]],
         ]), transport: $transport);
@@ -70,6 +84,51 @@ final class ClientTest extends TestCase
 
         self::assertSame('https://example.test/items?labels=red%20blue&flags=a%7Cb', $transport->lastRequest->url);
         self::assertSame('role=admin user', $transport->lastRequest->headers['metadata']);
+    }
+
+    public function testFormUrlEncodedRequestBodyUsesDeclaredEncoding(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = $this->bodySdk($transport, [
+            'required' => true,
+            'content' => ['application/x-www-form-urlencoded' => [
+                'schema' => ['type' => 'object'],
+                'encoding' => ['tags' => ['style' => 'form', 'explode' => true]],
+            ]],
+        ]);
+
+        $sdk->sendBody(body: ['title' => 'Hello world', 'tags' => ['one', 'two']]);
+
+        self::assertSame('application/x-www-form-urlencoded', $transport->lastRequest->headers['Content-Type']);
+        self::assertSame('title=Hello%20world&tags=one&tags=two', $transport->lastRequest->body);
+    }
+
+    public function testMultipartRequestBodyEncodesUploadParts(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = $this->bodySdk($transport, [
+            'content' => ['multipart/form-data' => ['schema' => ['type' => 'object']]],
+        ]);
+
+        $sdk->sendBody(body: ['caption' => 'A photo', 'file' => new Upload("\x00\xFFbytes", 'photo.bin', 'application/octet-stream')]);
+
+        self::assertStringStartsWith('multipart/form-data; boundary=CommunitySDKs', $transport->lastRequest->headers['Content-Type']);
+        self::assertStringContainsString('name="caption"', $transport->lastRequest->body);
+        self::assertStringContainsString('filename="photo.bin"', $transport->lastRequest->body);
+        self::assertStringContainsString("\x00\xFFbytes", $transport->lastRequest->body);
+    }
+
+    public function testBinaryRequestBodyPreservesBytes(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = $this->bodySdk($transport, [
+            'content' => ['application/octet-stream' => ['schema' => ['type' => 'string', 'format' => 'binary']]],
+        ]);
+
+        $sdk->sendBody(body: new Upload("\x00\xFFbytes", 'payload.bin'));
+
+        self::assertSame('application/octet-stream', $transport->lastRequest->headers['Content-Type']);
+        self::assertSame("\x00\xFFbytes", $transport->lastRequest->body);
     }
 
     public function testNamedArgumentsAndPathEncoding(): void

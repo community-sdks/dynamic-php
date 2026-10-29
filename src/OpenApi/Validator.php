@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace CommunitySDKs\OpenApi;
 
 use CommunitySDKs\Exception\ValidationException;
+use CommunitySDKs\Http\Upload;
 
 /** Small strict JSON-schema subset; unsupported keywords are not silently promised. */
 final readonly class Validator
@@ -24,6 +25,9 @@ final readonly class Validator
     {
         if ($depth > 32) {
             return ["{$at}: schema recursion limit exceeded"];
+        }
+        if ($value instanceof Upload) {
+            $value = $value->contents;
         }
         $schema = $this->document->resolve($schema);
         if (isset($schema['allOf'])) {

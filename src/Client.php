@@ -7,7 +7,7 @@ use CommunitySDKs\Exception\ApiException;
 use CommunitySDKs\Exception\SdkException;
 use CommunitySDKs\Exception\ValidationException;
 use CommunitySDKs\Http\{Request, Result, Response, StreamTransport, Transport};
-use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, Validator};
+use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, RequestBodySerializer, Validator};
 
 /** Universal operationId client. No endpoint-specific PHP classes are created. */
 readonly class Client
@@ -15,6 +15,7 @@ readonly class Client
     private Registry $registry;
     private Validator $validator;
     private ParameterSerializer $parameterSerializer;
+    private RequestBodySerializer $requestBodySerializer;
     private Transport $transport;
     private string $baseUrl;
 
@@ -30,6 +31,7 @@ readonly class Client
         $this->registry = new Registry($document);
         $this->validator = new Validator($document);
         $this->parameterSerializer = new ParameterSerializer();
+        $this->requestBodySerializer = new RequestBodySerializer();
         $this->transport = $transport ?? new StreamTransport();
         $server = $baseUrl ?? ($document->data['servers'][0]['url'] ?? null);
         if (!is_string($server) || !preg_match('~^https?://~i', $server)) {
@@ -91,11 +93,13 @@ readonly class Client
             if (!$hasBody && ($requestBody['required'] ?? false)) throw new ValidationException(['body: required']);
             if ($hasBody) {
                 $used['body'] = true;
-                $content = $requestBody['content']['application/json'] ?? null;
-                if (!is_array($content)) throw new SdkException('Only application/json request bodies are supported in this release.');
-                $this->validator->assert($arguments['body'], $content['schema'] ?? [], '$.body');
-                $body = json_encode($arguments['body'], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
-                $headers['Content-Type'] = 'application/json';
+                $contentTypes = $requestBody['content'] ?? [];
+                $mediaType = $this->requestBodySerializer->selectMediaType($contentTypes, $arguments['body']);
+                $media = $contentTypes[$mediaType];
+                $this->validator->assert($arguments['body'], $media['schema'] ?? [], '$.body');
+                $serialized = $this->requestBodySerializer->serialize($arguments['body'], $mediaType, $media);
+                $body = $serialized['body'];
+                $headers['Content-Type'] = $serialized['contentType'];
             }
         }
         $unknown = array_diff(array_keys($arguments), array_keys($used));
