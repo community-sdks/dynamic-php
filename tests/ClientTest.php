@@ -313,6 +313,24 @@ final class ClientTest extends TestCase
         self::assertSame('Bearer fresh-access-token', $transport->lastRequest->headers['Authorization']);
     }
 
+    public function testMultipartResponseDecodesJsonAndBinaryParts(): void
+    {
+        $body = "--demo\r\nContent-Disposition: form-data; name=\"metadata\"\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}\r\n"
+            ."--demo\r\nContent-Disposition: form-data; name=\"file\"; filename=\"photo.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n\x00\xFFraw\r\n--demo--\r\n";
+        $transport = new FakeTransport(new Response(200, ['Content-Type' => 'multipart/form-data; boundary=demo'], $body));
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/parts' => ['get' => ['operationId' => 'getParts', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport);
+
+        $result = $sdk->getParts();
+
+        self::assertSame('metadata', $result->data[0]->name);
+        self::assertSame(['ok' => true], $result->data[0]->data);
+        self::assertSame('photo.bin', $result->data[1]->filename);
+        self::assertSame("\x00\xFFraw", $result->data[1]->body);
+    }
+
     public function testPaginationRejectsCrossOriginNextLink(): void
     {
         $transport = new FakeTransport(new Response(200, ['Link' => '<https://other.example.test/items?page=2>; rel="next"'], '[]'));

@@ -6,7 +6,7 @@ namespace CommunitySDKs;
 use CommunitySDKs\Exception\ApiException;
 use CommunitySDKs\Exception\SdkException;
 use CommunitySDKs\Exception\ValidationException;
-use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, Request, Result, Response, RetryingTransport, StreamTransport, StreamingTransport, Transport};
+use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, MultipartDecoder, Request, Result, Response, RetryingTransport, StreamTransport, StreamingTransport, Transport};
 use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, RequestBodySerializer, SecurityResolver, Validator};
 use CommunitySDKs\Security\OAuthTokenProvider;
 
@@ -17,6 +17,7 @@ readonly class Client
     private Validator $validator;
     private ParameterSerializer $parameterSerializer;
     private RequestBodySerializer $requestBodySerializer;
+    private MultipartDecoder $multipartDecoder;
     private SecurityResolver $securityResolver;
     private Transport $transport;
     private ?StreamingTransport $streamingTransport;
@@ -43,6 +44,7 @@ readonly class Client
         $this->validator = new Validator($document);
         $this->parameterSerializer = new ParameterSerializer();
         $this->requestBodySerializer = new RequestBodySerializer();
+        $this->multipartDecoder = new MultipartDecoder();
         $this->securityResolver = new SecurityResolver($document);
         $configuredTransport = $transport ?? new StreamTransport();
         if ($middleware !== []) $configuredTransport = new MiddlewareTransport($configuredTransport, $middleware);
@@ -394,6 +396,7 @@ readonly class Client
     {
         if ($response->body === '') return null;
         $type = $response->contentType();
+        if (str_starts_with($type, 'multipart/')) return $this->multipartDecoder->decode($response);
         if ($type === 'application/json' || str_ends_with($type, '+json')) {
             return json_decode($response->body, true, 512, JSON_THROW_ON_ERROR);
         }
