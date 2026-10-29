@@ -5,6 +5,7 @@ declare(strict_types=1);
 
 require dirname(__DIR__).'/vendor/autoload.php';
 
+use CommunitySDKs\Developer\IdeStubGenerator;
 use CommunitySDKs\OpenApi\{Document, Registry};
 
 // Commands read a local specification; no code is executed from the spec.
@@ -35,18 +36,7 @@ try {
             echo "\nResponses: ".implode(', ', array_keys($op['responses'] ?? []))."\n\n";
         }
     } elseif ($command === 'ide') {
-        echo "<?php\n\n/**\n * Generated IDE metadata; NOT runtime implementations.\n";
-        foreach ($registry->all() as $id => $op) {
-            $params = [];
-            foreach ($op['_parameters'] as $p) {
-                $type = $p['schema']['type'] ?? 'mixed';
-                $type = match ($type) { 'integer' => 'int', 'number' => 'float', 'boolean' => 'bool', 'string' => 'string', 'array' => 'array', default => 'mixed' };
-                $params[] = $type.' $'.$p['name'].(($p['required'] ?? false) ? '' : ' = null');
-            }
-            if (isset($op['requestBody'])) $params[] = 'array $body';
-            echo ' * @method \\CommunitySDKs\\Http\\Result '.$id.'('.implode(', ', $params).")\n";
-        }
-        echo " */\nclass CommunitySdkIdeClient extends \\CommunitySDKs\\Client {}\n";
+        echo (new IdeStubGenerator($doc))->generate();
     }
 } catch (Throwable $e) {
     fwrite(STDERR, $e->getMessage()."\n");
