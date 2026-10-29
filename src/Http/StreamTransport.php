@@ -12,13 +12,10 @@ final readonly class StreamTransport implements StreamingTransport
 
     public function send(Request $request): Response
     {
-        $lines = [];
-        foreach ($request->headers as $name => $value) {
-            $lines[] = "{$name}: {$value}";
-        }
+        $headers = $this->headerLines($request);
         $context = stream_context_create(['http' => [
             'method' => $request->method,
-            'header' => implode("\r\n", $lines),
+            'header' => $headers,
             'content' => $request->body,
             'timeout' => $this->timeout,
             'ignore_errors' => true,
@@ -49,11 +46,10 @@ final readonly class StreamTransport implements StreamingTransport
     public function stream(Request $request, callable $onChunk, int $chunkSize = 16384): Response
     {
         if ($chunkSize < 1) throw new \InvalidArgumentException('Chunk size must be positive.');
-        $lines = [];
-        foreach ($request->headers as $name => $value) $lines[] = "{$name}: {$value}";
+        $headers = $this->headerLines($request);
         $context = stream_context_create(['http' => [
             'method' => $request->method,
-            'header' => implode("\r\n", $lines),
+            'header' => $headers,
             'content' => $request->body,
             'timeout' => $this->timeout,
             'ignore_errors' => true,
@@ -92,5 +88,17 @@ final readonly class StreamTransport implements StreamingTransport
             fclose($stream);
         }
         return new Response($status, $parsed, $errorBody);
+    }
+
+    private function headerLines(Request $request): string
+    {
+        $lines = [];
+        foreach ($request->headers as $name => $value) {
+            if (preg_match('/^[!#$%&\'*+.^_`|~0-9A-Za-z-]+$/', $name) !== 1 || preg_match('/[\x00-\x1F\x7F]/', $value)) {
+                throw new TransportException('Invalid HTTP request header.');
+            }
+            $lines[] = "{$name}: {$value}";
+        }
+        return implode("\r\n", $lines);
     }
 }
