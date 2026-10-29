@@ -80,18 +80,28 @@ $client = new Client(
 );
 ```
 
-`Client::fromFile()` provides a shortcut and supports a custom `Transport`. Build an adapter implementing `CommunitySDKs\Http\Transport` to plug in a PSR-18 or other HTTP client. For OpenAPI API-key schemes, pass credentials by scheme name with `credentials: ['apiKeyAuth' => '...']`; the SDK supports API keys in headers, query strings, and cookies, HTTP Basic/Bearer, and caller-supplied OAuth access tokens. `OAuthTokenProvider` receives the scheme name and required scopes, so applications can retrieve or refresh tokens using their own OAuth library.
+`Client::fromFile()` provides a shortcut and supports a custom `Transport`. Build an adapter implementing `CommunitySDKs\Http\Transport` to plug in a PSR-18 or other HTTP client. For OpenAPI API-key schemes, pass credentials by scheme name with `credentials: ['apiKeyAuth' => '...']`, or implement `SecurityCredentialProvider` to retrieve/rotate credentials per request. OAuth providers receive the scheme name and required scopes. The included `ClientCredentialsTokenProvider` supports the client-credentials grant with an HTTPS token endpoint and an explicit host allowlist; other OAuth flows can use a custom provider.
+
+OpenAPI server-variable defaults are used automatically; override them with `serverVariables: ['region' => 'eu']`. Operation- and path-level `servers` take precedence over document-level servers. When the application controls the server URL, set `allowedHosts` to an exact hostname allowlist.
 
 ### Uploads, pagination and streaming
 
 ```php
-use CommunitySDKs\Http\{MetricsMiddleware, RateLimitMiddleware, Upload};
+use CommunitySDKs\Http\{MetricsMiddleware, PaginationStrategy, RateLimitMiddleware, Request, Response, Upload};
+use CommunitySDKs\Security\ClientCredentialsTokenProvider;
 
 $client = new Client(
     document: Document::fromFile('specs/api.openapi.json'),
+    allowedHosts: ['api.example.test'],
+    oauthTokenProvider: new ClientCredentialsTokenProvider(
+        'https://auth.example.test/oauth/token',
+        'client-id',
+        getenv('API_CLIENT_SECRET'),
+        allowedHosts: ['auth.example.test'],
+    ),
     middleware: [
         new RateLimitMiddleware(0.25),
-        new MetricsMiddleware(static function ($request, $response, float $seconds, $error): void {
+        new MetricsMiddleware(static function (Request $request, ?Response $response, float $seconds, ?Throwable $error): void {
             // Send request outcome and duration to the application's metrics backend.
         }),
     ],
@@ -104,6 +114,15 @@ $client->uploadPhoto(body: ['file' => $upload]);
 foreach ($client->paginate('listItems', ['limit' => 100]) as $page) {
     foreach ($page->data as $item) { /* process item */ }
 }
+
+$cursorStrategy = new class implements PaginationStrategy {
+    public function nextArguments(\CommunitySDKs\Http\Result $page, array $arguments): ?array
+    {
+        $cursor = $page->data['nextCursor'] ?? null;
+        return is_string($cursor) ? array_replace($arguments, ['cursor' => $cursor]) : null;
+    }
+};
+foreach ($client->paginate('listItems', strategy: $cursorStrategy, maxPages: 100) as $page) { /* process */ }
 
 $client->download('downloadFile', __DIR__.'/download.bin', ['id' => 42]);
 $client->downloadResumable('largeFile', __DIR__.'/large.bin', ['id' => 42]);
@@ -182,18 +201,18 @@ All runtime operations use one `Client`, regardless of how many OpenAPI paths ex
 ## Supported today
 
 - OpenAPI 3.x JSON and YAML **local files**
-- local `#/...` references, including recursive schemas; external references are rejected
+- local `#/...` and trusted sibling-file refs rooted beneath the spec directory, including recursive schemas; network refs and path escapes are rejected
 - document, path-item, and operation-level servers, server variable defaults/overrides, and optional exact-host allowlists
 - HTTP GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS/TRACE operation registry
 - `operationId` naming (fallback generated from verb + path)
 - PHP magic `__call` and explicit `call()`
-- path, query, header and cookie parameters; `simple`, `label`, `matrix`, `form`, `spaceDelimited`, `pipeDelimited`, and `deepObject` serialization where defined by OpenAPI; JSON and text `Parameter Object.content`
+- path, query, header and cookie parameters; `simple`, `label`, `matrix`, `form`, `spaceDelimited`, `pipeDelimited`, `deepObject`, and `allowEmptyValue`; JSON and text `Parameter Object.content`
 - JSON, URL-encoded, multipart, and binary request bodies; `Upload` values and explicit file helpers
 - JSON and multipart response decoding, status-specific response schemas, response validation
 - JSON Schema 2020-12 validation through Opis, including recursive references, `not`, dependent schemas, formats, and `unevaluatedProperties`; OpenAPI 3.0 `nullable` and referenced `oneOf` discriminators are adapted
 - HTTP error payload/status preservation, transport exceptions
-- OpenAPI security inheritance and alternatives, API keys, HTTP Basic/Bearer, and scope-aware OAuth token-provider hooks
-- optional same-origin Link pagination, chunked and resumable range downloads, SSE, idempotent retries, rate limiting, request metrics, middleware, custom transport injection
+- OpenAPI security inheritance and alternatives, API keys, HTTP Basic/Bearer, per-request credential providers, and scope-aware OAuth token providers
+- same-origin Link or caller-defined cursor pagination, chunked and resumable range downloads, SSE, idempotent retries, rate limiting, request metrics, middleware, custom transport injection
 - introspection, Markdown docs, nested PHPStan/PHPDoc IDE hints, optional strict DTO generation
 - deterministic tests with a fake transport, GitHub Actions
 
@@ -201,12 +220,12 @@ All runtime operations use one `Client`, regardless of how many OpenAPI paths ex
 
 **This is a deliberately scoped v0.1.0, not an OpenAPI conformance-certified SDK.** In particular:
 
-1. Supported OpenAPI and JSON Schema behavior is not complete conformance. Server URL templates are supported, but relative servers, callbacks, webhooks, `allowEmptyValue`, and every serialization edge case are not implemented.
-2. OAuth tokens are supplied by the caller's provider; authorization-code/client-credentials exchanges, scope enforcement, API-key rotation, and credential stores are not implemented. Security validation must not be treated as authorization policy.
-3. External `$ref` is rejected. OpenAPI discriminator adaptation supports referenced `oneOf` variants, not every discriminator shape. JSON Schema validation is runtime validation, not a security boundary; validate untrusted input separately and test custom formats/keywords.
+1. Supported OpenAPI and JSON Schema behavior is not complete conformance. Server URL templates are supported, but relative servers, callbacks, webhooks, parameter `content` beyond JSON/text, and every serialization edge case are not implemented.
+2. OAuth client credentials are supported, but authorization-code/device flows, scope enforcement, token revocation, and credential stores are not built in. Custom providers can implement other flows. Security validation must not be treated as authorization policy.
+3. External `$ref` is supported only for local files beneath the original spec directory; network refs and path escapes are rejected. OpenAPI discriminator adaptation supports referenced `oneOf` variants, not every discriminator shape. JSON Schema validation is runtime validation, not a security boundary; validate untrusted input separately and test custom formats/keywords.
 4. JSON and multipart media types decode to PHP values and parts; other content types remain raw strings. SSE parsing is basic. Range downloads require a server that returns valid byte ranges and stable ETags for safe resume.
-5. Pagination supports `Link` next relations only, and follows same-origin links only. It does not infer cursor/page parameters or deduplicate items.
-6. Retry defaults to off and only retries idempotent HTTP methods. Metrics are callback-based. No retry budget coordination, circuit breaker, distributed rate limit, or built-in token refresh is included.
+5. Link pagination follows same-origin links only. Cursor pagination needs a caller-provided strategy; automatic item deduplication is not included.
+6. Retry defaults to off and only retries idempotent HTTP methods. Metrics are callback-based. No retry budget coordination, circuit breaker, or distributed rate limit is included.
 7. Built-in redirects are disabled. Specs are loaded from local files only. Base URLs must be trusted and allow-listed by applications that accept user-controlled configuration; syntax checks alone do not prevent SSRF.
 8. DTO generation covers object component schemas with strict constructors and JSON serialization, not generic hydration or all schema compositions. IDE hints remain PHPDoc, not compile-time validation; complex recursive models can still fall back to generic array/mixed types.
 9. Portable parameter fixtures are included, but this repository has no other SDK runtime to consume them. JSONPlaceholder's sample specification is manually maintained and may not cover all real responses.
