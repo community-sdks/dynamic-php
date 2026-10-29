@@ -1,0 +1,54 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+require dirname(__DIR__).'/vendor/autoload.php';
+
+use CommunitySDKs\OpenApi\{Document, Registry};
+
+// Commands read a local specification; no code is executed from the spec.
+[$script, $command, $file] = array_pad($argv, 3, null);
+if (!$command || !$file || !in_array($command, ['list', 'describe', 'docs', 'ide'], true)) {
+    fwrite(STDERR, "Usage: community-sdk <list|describe|docs|ide> <openapi.json|yaml> [operationId]\n");
+    exit(2);
+}
+try {
+    $doc = Document::fromFile($file);
+    $registry = new Registry($doc);
+    if ($command === 'list') {
+        foreach ($registry->all(search: $argv[3] ?? null) as $id => $op) {
+            echo sprintf("%-35s %7s %s\n", $id, $op['_method'], $op['_path']);
+        }
+    } elseif ($command === 'describe') {
+        $id = $argv[3] ?? throw new RuntimeException('Specify operationId.');
+        echo json_encode($registry->get($id), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n";
+    } elseif ($command === 'docs') {
+        echo "# ".($doc->data['info']['title'] ?? 'API')."\n\n";
+        foreach ($registry->all() as $id => $op) {
+            echo "## {$id}\n\n{$op['_method']} `{$op['_path']}`\n\n";
+            if (isset($op['summary'])) echo $op['summary']."\n\n";
+            foreach ($op['_parameters'] as $p) {
+                echo "- `{$p['name']}` ({$p['in']}, ".(($p['required'] ?? false) ? 'required' : 'optional').")\n";
+            }
+            if (isset($op['requestBody'])) echo "- `body` (requestBody)\n";
+            echo "\nResponses: ".implode(', ', array_keys($op['responses'] ?? []))."\n\n";
+        }
+    } elseif ($command === 'ide') {
+        echo "<?php\n\n/**\n * Generated IDE metadata; NOT runtime implementations.\n";
+        foreach ($registry->all() as $id => $op) {
+            $params = [];
+            foreach ($op['_parameters'] as $p) {
+                $type = $p['schema']['type'] ?? 'mixed';
+                $type = match ($type) { 'integer' => 'int', 'number' => 'float', 'boolean' => 'bool', 'string' => 'string', 'array' => 'array', default => 'mixed' };
+                $params[] = $type.' $'.$p['name'].(($p['required'] ?? false) ? '' : ' = null');
+            }
+            if (isset($op['requestBody'])) $params[] = 'array $body';
+            echo ' * @method \\CommunitySDKs\\Http\\Result '.$id.'('.implode(', ', $params).")\n";
+        }
+        echo " */\nclass CommunitySdkIdeClient extends \\CommunitySDKs\\Client {}\n";
+    }
+} catch (Throwable $e) {
+    fwrite(STDERR, $e->getMessage()."\n");
+    exit(1);
+}
