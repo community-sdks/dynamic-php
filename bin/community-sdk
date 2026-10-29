@@ -6,12 +6,13 @@ declare(strict_types=1);
 require dirname(__DIR__).'/vendor/autoload.php';
 
 use CommunitySDKs\Developer\IdeStubGenerator;
+use CommunitySDKs\Developer\DtoGenerator;
 use CommunitySDKs\OpenApi\{Document, Registry};
 
 // Commands read a local specification; no code is executed from the spec.
 [$script, $command, $file] = array_pad($argv, 3, null);
-if (!$command || !$file || !in_array($command, ['list', 'describe', 'docs', 'ide'], true)) {
-    fwrite(STDERR, "Usage: community-sdk <list|describe|docs|ide> <openapi.json|yaml> [operationId]\n");
+if (!$command || !$file || !in_array($command, ['list', 'describe', 'docs', 'ide', 'dto'], true)) {
+    fwrite(STDERR, "Usage: community-sdk <list|describe|docs|ide|dto> <openapi.json|yaml> [operationId|namespace]\n");
     exit(2);
 }
 try {
@@ -37,6 +38,8 @@ try {
         }
     } elseif ($command === 'ide') {
         echo (new IdeStubGenerator($doc))->generate();
+    } elseif ($command === 'dto') {
+        echo (new DtoGenerator($doc))->generate($argv[3] ?? 'CommunitySDKs\\Generated');
     }
 } catch (Throwable $e) {
     fwrite(STDERR, $e->getMessage()."\n");

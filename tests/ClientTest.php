@@ -331,6 +331,28 @@ final class ClientTest extends TestCase
         self::assertSame("\x00\xFFraw", $result->data[1]->body);
     }
 
+    public function testJsonSerializableDtoUsesJsonPropertyNamesForValidationAndEncoding(): void
+    {
+        $transport = new FakeTransport();
+        $dto = new class implements \JsonSerializable {
+            public function jsonSerialize(): array { return ['display-name' => 'Ada']; }
+        };
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/users' => ['post' => [
+                'operationId' => 'createUser',
+                'requestBody' => ['required' => true, 'content' => ['application/json' => ['schema' => [
+                    'type' => 'object', 'required' => ['display-name'], 'properties' => ['display-name' => ['type' => 'string']],
+                ]]]],
+                'responses' => ['201' => ['description' => 'created']],
+            ]]],
+        ]), transport: $transport);
+
+        $sdk->createUser(body: $dto);
+
+        self::assertSame('{"display-name":"Ada"}', $transport->lastRequest->body);
+    }
+
     public function testPaginationRejectsCrossOriginNextLink(): void
     {
         $transport = new FakeTransport(new Response(200, ['Link' => '<https://other.example.test/items?page=2>; rel="next"'], '[]'));

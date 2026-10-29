@@ -147,6 +147,7 @@ final readonly class Validator
     private function normalizeData(mixed $value, array $schema): mixed
     {
         if ($value instanceof Upload) return $value->contents;
+        if ($value instanceof \JsonSerializable) $value = $value->jsonSerialize();
         if (is_object($value)) {
             $value = get_object_vars($value);
             $object = new \stdClass();

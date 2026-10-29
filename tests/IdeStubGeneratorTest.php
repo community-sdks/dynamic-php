@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace CommunitySDKs\Tests;
 
 use CommunitySDKs\Developer\IdeStubGenerator;
+use CommunitySDKs\Developer\DtoGenerator;
 use CommunitySDKs\OpenApi\Document;
 use PHPUnit\Framework\TestCase;
 
@@ -49,6 +50,24 @@ final class IdeStubGeneratorTest extends TestCase
         $stub = (new IdeStubGenerator($document))->generate();
 
         self::assertStringContainsString('createItem(array<string, mixed> $body, ?string $locale = null)', $stub);
+    }
+
+    public function testDtoGeneratorPreservesJsonNamesAndUsesStrictProperties(): void
+    {
+        $document = new Document([
+            'openapi' => '3.1.0', 'paths' => [],
+            'components' => ['schemas' => ['User-Profile' => [
+                'type' => 'object', 'required' => ['id'],
+                'properties' => ['id' => ['type' => 'integer'], 'display-name' => ['type' => 'string']],
+            ]]],
+        ]);
+
+        $dto = (new DtoGenerator($document))->generate();
+
+        self::assertStringContainsString('final readonly class UserProfile implements \\JsonSerializable', $dto);
+        self::assertStringContainsString('public int $id', $dto);
+        self::assertStringContainsString('public ?string $display_name = null', $dto);
+        self::assertStringContainsString("'display-name' => \$this->display_name", $dto);
     }
 
     public function testGeneratesMixedFallbackForRecursiveModelsAndInvalidOperationNames(): void
