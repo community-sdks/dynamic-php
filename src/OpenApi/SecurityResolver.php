@@ -6,13 +6,14 @@ namespace CommunitySDKs\OpenApi;
 use CommunitySDKs\Exception\SdkException;
 use CommunitySDKs\Exception\ValidationException;
 use CommunitySDKs\Security\OAuthTokenProvider;
+use CommunitySDKs\Security\SecurityCredentialProvider;
 
 final readonly class SecurityResolver
 {
     public function __construct(private Document $document) {}
 
     /** @param array<string,mixed> $operation @param array<string,string> $credentials @param array<string,string> $headers @param list<string> $query @param list<string> $cookies */
-    public function apply(array $operation, ?string $token, array $credentials, array &$headers, array &$query, array &$cookies, ?OAuthTokenProvider $tokenProvider = null): void
+    public function apply(array $operation, ?string $token, array $credentials, array &$headers, array &$query, array &$cookies, ?OAuthTokenProvider $tokenProvider = null, ?SecurityCredentialProvider $credentialProvider = null): void
     {
         $requirements = array_key_exists('security', $operation)
             ? $operation['security']
@@ -41,6 +42,9 @@ final readonly class SecurityResolver
                         throw new SdkException("Invalid OAuth scopes for security scheme {$name}.");
                     }
                     $credential = $tokenProvider->accessToken($name, array_values($scopes));
+                }
+                if ($credential === null && $credentialProvider !== null) {
+                    $credential = $credentialProvider->credential($name, $scheme);
                 }
                 if ($credential === null && in_array($scheme['type'] ?? '', ['http', 'oauth2', 'openIdConnect'], true)) {
                     $credential = $token;

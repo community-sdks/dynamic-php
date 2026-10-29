@@ -8,6 +8,7 @@ use CommunitySDKs\Exception\{ApiException, SdkException, ValidationException};
 use CommunitySDKs\Http\{HttpMiddleware, MetricsMiddleware, MiddlewareTransport, Request, Response, Upload};
 use CommunitySDKs\OpenApi\Registry;
 use CommunitySDKs\Security\OAuthTokenProvider;
+use CommunitySDKs\Security\SecurityCredentialProvider;
 use CommunitySDKs\OpenApi\Document;
 use PHPUnit\Framework\TestCase;
 
@@ -324,6 +325,30 @@ final class ClientTest extends TestCase
         self::assertSame('oauth', $provider->schemeName);
         self::assertSame(['items:read', 'profile:read'], $provider->scopes);
         self::assertSame('Bearer fresh-access-token', $transport->lastRequest->headers['Authorization']);
+    }
+
+    public function testCredentialProviderCanRotateApiKeysPerRequest(): void
+    {
+        $transport = new FakeTransport();
+        $provider = new class implements SecurityCredentialProvider {
+            public int $calls = 0;
+            public function credential(string $schemeName, array $scheme): string
+            {
+                $this->calls++;
+                return 'rotated-'.$this->calls;
+            }
+        };
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'security' => [['apiKey' => []]],
+            'components' => ['securitySchemes' => ['apiKey' => ['type' => 'apiKey', 'in' => 'header', 'name' => 'X-API-Key']]],
+            'paths' => ['/secure' => ['get' => ['operationId' => 'secure', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport, credentialProvider: $provider);
+
+        $sdk->secure();
+        self::assertSame('rotated-1', $transport->lastRequest->headers['X-API-Key']);
+        $sdk->secure();
+        self::assertSame('rotated-2', $transport->lastRequest->headers['X-API-Key']);
     }
 
     public function testMultipartResponseDecodesJsonAndBinaryParts(): void

@@ -9,6 +9,7 @@ use CommunitySDKs\Exception\ValidationException;
 use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, MultipartDecoder, Request, Result, Response, RetryingTransport, StreamTransport, StreamingTransport, Transport};
 use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, RequestBodySerializer, SecurityResolver, Validator};
 use CommunitySDKs\Security\OAuthTokenProvider;
+use CommunitySDKs\Security\SecurityCredentialProvider;
 
 /** Universal operationId client. No endpoint-specific PHP classes are created. */
 readonly class Client
@@ -42,6 +43,7 @@ readonly class Client
         private ?OAuthTokenProvider $oauthTokenProvider = null,
         /** @var array<string,string> server variable overrides */
         private array $serverVariables = [],
+        private ?SecurityCredentialProvider $credentialProvider = null,
     ) {
         $this->registry = new Registry($document);
         $this->validator = new Validator($document);
@@ -75,9 +77,9 @@ readonly class Client
     }
 
     /** @param array<string,string> $credentials @param list<HttpMiddleware> $middleware @param list<string> $allowedHosts @param array<string,string> $serverVariables */
-    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0, array $allowedHosts = [], ?OAuthTokenProvider $oauthTokenProvider = null, array $serverVariables = []): self
+    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0, array $allowedHosts = [], ?OAuthTokenProvider $oauthTokenProvider = null, array $serverVariables = [], ?SecurityCredentialProvider $credentialProvider = null): self
     {
-        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries, allowedHosts: $allowedHosts, oauthTokenProvider: $oauthTokenProvider, serverVariables: $serverVariables);
+        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries, allowedHosts: $allowedHosts, oauthTokenProvider: $oauthTokenProvider, serverVariables: $serverVariables, credentialProvider: $credentialProvider);
     }
 
     private function validateBaseUrl(string $server): string
@@ -205,7 +207,7 @@ readonly class Client
         }
         $unknown = array_diff(array_keys($arguments), array_keys($used));
         if ($unknown !== []) throw new ValidationException(['Unknown arguments: '.implode(', ', $unknown)]);
-        $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies, $this->oauthTokenProvider);
+        $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies, $this->oauthTokenProvider, $this->credentialProvider);
         $this->mergeCookies($headers, $cookies);
         $url = $this->baseUrlForOperation($op).'/'.ltrim($path, '/');
         if ($query !== []) $url .= '?'.implode('&', $query);
@@ -437,7 +439,7 @@ readonly class Client
                 if ($parameter['in'] === 'header') $headers[$name] = $this->parameterSerializer->header($parameter, $arguments[$name]);
             }
             $query = $cookies = [];
-            $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies, $this->oauthTokenProvider);
+            $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies, $this->oauthTokenProvider, $this->credentialProvider);
             if ($query !== []) $url = $this->appendSecurityQuery($url, $query);
             $this->mergeCookies($headers, $cookies);
             $currentUrl = $url;
