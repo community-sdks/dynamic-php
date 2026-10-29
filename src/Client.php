@@ -7,7 +7,7 @@ use CommunitySDKs\Exception\ApiException;
 use CommunitySDKs\Exception\SdkException;
 use CommunitySDKs\Exception\ValidationException;
 use CommunitySDKs\Http\{Request, Result, Response, StreamTransport, Transport};
-use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, RequestBodySerializer, Validator};
+use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, RequestBodySerializer, SecurityResolver, Validator};
 
 /** Universal operationId client. No endpoint-specific PHP classes are created. */
 readonly class Client
@@ -16,6 +16,7 @@ readonly class Client
     private Validator $validator;
     private ParameterSerializer $parameterSerializer;
     private RequestBodySerializer $requestBodySerializer;
+    private SecurityResolver $securityResolver;
     private Transport $transport;
     private string $baseUrl;
 
@@ -27,11 +28,14 @@ readonly class Client
         private ?string $token = null,
         private array $defaultHeaders = [],
         private bool $validateResponses = true,
+        /** @var array<string,string> credentials keyed by OpenAPI security scheme name */
+        private array $credentials = [],
     ) {
         $this->registry = new Registry($document);
         $this->validator = new Validator($document);
         $this->parameterSerializer = new ParameterSerializer();
         $this->requestBodySerializer = new RequestBodySerializer();
+        $this->securityResolver = new SecurityResolver($document);
         $this->transport = $transport ?? new StreamTransport();
         $server = $baseUrl ?? ($document->data['servers'][0]['url'] ?? null);
         if (!is_string($server) || !preg_match('~^https?://~i', $server)) {
@@ -40,9 +44,10 @@ readonly class Client
         $this->baseUrl = rtrim($server, '/');
     }
 
-    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null): self
+    /** @param array<string,string> $credentials */
+    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = []): self
     {
-        return new self(Document::fromFile($file), $baseUrl, $transport, $token);
+        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials);
     }
 
     public function operations(): Registry { return $this->registry; }
@@ -82,9 +87,6 @@ readonly class Client
                 array_push($cookies, ...$this->parameterSerializer->cookie($parameter, $value));
             }
         }
-        if ($cookies !== []) {
-            $headers['Cookie'] = isset($headers['Cookie']) ? $headers['Cookie'].'; '.implode('; ', $cookies) : implode('; ', $cookies);
-        }
         if (str_contains($path, '{')) throw new SdkException('Unresolved path parameter.');
         $body = '';
         if (isset($op['requestBody'])) {
@@ -104,9 +106,9 @@ readonly class Client
         }
         $unknown = array_diff(array_keys($arguments), array_keys($used));
         if ($unknown !== []) throw new ValidationException(['Unknown arguments: '.implode(', ', $unknown)]);
-        if ($this->token !== null) {
-            // Explicit Bearer auth only; do not silently handle different security schemes.
-            $headers['Authorization'] = 'Bearer '.$this->token;
+        $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies);
+        if ($cookies !== []) {
+            $headers['Cookie'] = isset($headers['Cookie']) ? $headers['Cookie'].'; '.implode('; ', $cookies) : implode('; ', $cookies);
         }
         $url = $this->baseUrl.'/'.ltrim($path, '/');
         if ($query !== []) $url .= '?'.implode('&', $query);

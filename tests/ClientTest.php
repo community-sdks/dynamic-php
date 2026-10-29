@@ -131,6 +131,78 @@ final class ClientTest extends TestCase
         self::assertSame("\x00\xFFbytes", $transport->lastRequest->body);
     }
 
+    public function testSecurityInheritanceAndOperationOverride(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0',
+            'servers' => [['url' => 'https://example.test']],
+            'security' => [['bearerAuth' => []]],
+            'components' => ['securitySchemes' => [
+                'bearerAuth' => ['type' => 'http', 'scheme' => 'bearer'],
+                'apiKeyAuth' => ['type' => 'apiKey', 'in' => 'header', 'name' => 'X-API-Key'],
+            ]],
+            'paths' => ['/secure' => ['get' => [
+                'operationId' => 'secure',
+                'security' => [['apiKeyAuth' => []]],
+                'responses' => ['200' => ['description' => 'ok']],
+            ]]],
+        ]), transport: $transport, token: 'ignored-bearer', credentials: ['apiKeyAuth' => 'secret-key']);
+
+        $sdk->secure();
+
+        self::assertSame('secret-key', $transport->lastRequest->headers['X-API-Key']);
+        self::assertArrayNotHasKey('Authorization', $transport->lastRequest->headers);
+    }
+
+    public function testSecurityRequirementsSupportApiKeyAndAlternatives(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0',
+            'servers' => [['url' => 'https://example.test']],
+            'security' => [['queryKey' => [], 'cookieKey' => []], ['bearerAuth' => []]],
+            'components' => ['securitySchemes' => [
+                'queryKey' => ['type' => 'apiKey', 'in' => 'query', 'name' => 'api_key'],
+                'cookieKey' => ['type' => 'apiKey', 'in' => 'cookie', 'name' => 'session'],
+                'bearerAuth' => ['type' => 'http', 'scheme' => 'bearer'],
+            ]],
+            'paths' => ['/secure' => ['get' => [
+                'operationId' => 'secure',
+                'responses' => ['200' => ['description' => 'ok']],
+            ]]],
+        ]), transport: $transport, token: 'access-token');
+
+        $sdk->secure();
+
+        self::assertSame('https://example.test/secure', $transport->lastRequest->url);
+        self::assertSame('Bearer access-token', $transport->lastRequest->headers['Authorization']);
+        self::assertArrayNotHasKey('Cookie', $transport->lastRequest->headers);
+    }
+
+    public function testApiKeySecuritySchemeAppliesQueryAndCookieTogether(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0',
+            'servers' => [['url' => 'https://example.test']],
+            'security' => [['queryKey' => [], 'cookieKey' => []]],
+            'components' => ['securitySchemes' => [
+                'queryKey' => ['type' => 'apiKey', 'in' => 'query', 'name' => 'api_key'],
+                'cookieKey' => ['type' => 'apiKey', 'in' => 'cookie', 'name' => 'session'],
+            ]],
+            'paths' => ['/secure' => ['get' => [
+                'operationId' => 'secure',
+                'responses' => ['200' => ['description' => 'ok']],
+            ]]],
+        ]), transport: $transport, credentials: ['queryKey' => 'query secret', 'cookieKey' => 'cookie secret']);
+
+        $sdk->secure();
+
+        self::assertSame('https://example.test/secure?api_key=query%20secret', $transport->lastRequest->url);
+        self::assertSame('session=cookie%20secret', $transport->lastRequest->headers['Cookie']);
+    }
+
     public function testNamedArgumentsAndPathEncoding(): void
     {
         $transport = new FakeTransport(new Response(200, ['Content-Type'=>'application/json'], '{"id":1,"title":"Hi","body":"Text","userId":2}'));
