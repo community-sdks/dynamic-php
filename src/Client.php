@@ -385,6 +385,28 @@ readonly class Client
         $entry = $this->document->resolve($entry);
         $type = $response->contentType();
         $content = $entry['content'] ?? [];
-        return $content[$type]['schema'] ?? ($type === '' ? ($content['application/json']['schema'] ?? null) : null);
+        if ($type === '') return $content['application/json']['schema'] ?? null;
+        if (isset($content[$type]['schema'])) return $content[$type]['schema'];
+        foreach ($content as $mediaType => $media) {
+            if (is_string($mediaType) && is_array($media) && isset($media['schema']) && $this->mediaTypeMatches($mediaType, $type)) {
+                return $media['schema'];
+            }
+        }
+        return null;
+    }
+
+    private function mediaTypeMatches(string $pattern, string $actual): bool
+    {
+        $pattern = strtolower(trim(explode(';', $pattern, 2)[0]));
+        $actual = strtolower(trim(explode(';', $actual, 2)[0]));
+        if ($pattern === '*/*' || $pattern === $actual) return true;
+        [$patternType, $patternSubtype] = array_pad(explode('/', $pattern, 2), 2, '');
+        [$actualType, $actualSubtype] = array_pad(explode('/', $actual, 2), 2, '');
+        if ($patternType !== '*' && $patternType !== $actualType) return false;
+        if ($patternSubtype === '*') return true;
+        if (str_starts_with($patternSubtype, '*+')) {
+            return str_ends_with($actualSubtype, substr($patternSubtype, 1));
+        }
+        return false;
     }
 }

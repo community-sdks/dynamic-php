@@ -239,6 +239,23 @@ final class ClientTest extends TestCase
         self::assertSame('https://example.test/items?cursor=next&api_key=trusted', $transport->lastRequest->url);
     }
 
+    public function testVendorJsonResponseMatchesStructuredSuffixMediaRange(): void
+    {
+        $transport = new FakeTransport(new Response(200, ['Content-Type' => 'application/problem+json'], '{"code":42}'));
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/problem' => ['get' => ['operationId' => 'getProblem', 'responses' => ['200' => [
+                'description' => 'ok',
+                'content' => ['application/*+json' => ['schema' => [
+                    'type' => 'object', 'properties' => ['code' => ['type' => 'string']], 'required' => ['code'],
+                ]]],
+            ]]]]],
+        ]), transport: $transport);
+
+        $this->expectException(ValidationException::class);
+        $sdk->getProblem();
+    }
+
     public function testPaginationRejectsCrossOriginNextLink(): void
     {
         $transport = new FakeTransport(new Response(200, ['Link' => '<https://other.example.test/items?page=2>; rel="next"'], '[]'));
