@@ -104,15 +104,32 @@ readonly class Client
             }
             $used[$name] = true;
             $value = $arguments[$name];
-            if (isset($parameter['schema'])) $this->validator->assert($value, $parameter['schema'], '$.'.$name);
-            if ($place === 'path') {
-                $path = str_replace('{'.$name.'}', $this->parameterSerializer->path($parameter, $value), $path);
-            } elseif ($place === 'query') {
-                array_push($query, ...$this->parameterSerializer->query($parameter, $value));
-            } elseif ($place === 'header') {
-                $headers[$name] = $this->parameterSerializer->header($parameter, $value);
-            } elseif ($place === 'cookie') {
-                array_push($cookies, ...$this->parameterSerializer->cookie($parameter, $value));
+            if (isset($parameter['content'])) {
+                $content = $parameter['content'];
+                $media = is_array($content) ? reset($content) : null;
+                $schema = is_array($media) ? ($media['schema'] ?? []) : [];
+                if ($schema !== []) $this->validator->assert($value, $schema, '$.'.$name);
+                $serialized = $this->parameterSerializer->contentValue($parameter, $value);
+                if ($place === 'path') {
+                    $path = str_replace('{'.$name.'}', rawurlencode($serialized), $path);
+                } elseif ($place === 'query') {
+                    $query[] = $this->parameterSerializer->contentQuery($name, $serialized);
+                } elseif ($place === 'header') {
+                    $headers[$name] = $this->parameterSerializer->header($parameter, $serialized);
+                } elseif ($place === 'cookie') {
+                    $cookies[] = $this->parameterSerializer->contentCookie($name, $serialized);
+                }
+            } else {
+                if (isset($parameter['schema'])) $this->validator->assert($value, $parameter['schema'], '$.'.$name);
+                if ($place === 'path') {
+                    $path = str_replace('{'.$name.'}', $this->parameterSerializer->path($parameter, $value), $path);
+                } elseif ($place === 'query') {
+                    array_push($query, ...$this->parameterSerializer->query($parameter, $value));
+                } elseif ($place === 'header') {
+                    $headers[$name] = $this->parameterSerializer->header($parameter, $value);
+                } elseif ($place === 'cookie') {
+                    array_push($cookies, ...$this->parameterSerializer->cookie($parameter, $value));
+                }
             }
         }
         if (str_contains($path, '{')) throw new SdkException('Unresolved path parameter.');

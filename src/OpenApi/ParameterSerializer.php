@@ -9,6 +9,31 @@ use CommunitySDKs\Exception\ValidationException;
 final class ParameterSerializer
 {
     /** @param array<string,mixed> $parameter */
+    public function contentValue(array $parameter, mixed $value): string
+    {
+        $content = $parameter['content'] ?? [];
+        if (!is_array($content) || count($content) !== 1) {
+            throw new SdkException('A parameter content definition must declare exactly one media type.');
+        }
+        $mediaType = strtolower(trim(explode(';', (string) array_key_first($content), 2)[0]));
+        if ($mediaType === 'application/json' || str_ends_with($mediaType, '+json')) {
+            return json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        }
+        if ($mediaType === 'text/plain' && is_scalar($value)) return (string) $value;
+        throw new SdkException("Unsupported parameter content media type: {$mediaType}");
+    }
+
+    public function contentQuery(string $name, string $value): string
+    {
+        return rawurlencode($name).'='.rawurlencode($value);
+    }
+
+    public function contentCookie(string $name, string $value): string
+    {
+        return rawurlencode($name).'='.rawurlencode($value);
+    }
+
+    /** @param array<string,mixed> $parameter */
     public function path(array $parameter, mixed $value): string
     {
         $name = $parameter['name'];

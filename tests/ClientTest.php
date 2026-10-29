@@ -266,6 +266,22 @@ final class ClientTest extends TestCase
         new Client($document, baseUrl: 'https://attacker.example.test', allowedHosts: ['api.example.test']);
     }
 
+    public function testParameterContentSerializesJsonQueryAndTextHeader(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = $this->parameterSdk($transport, [
+            ['name' => 'filter', 'in' => 'query', 'content' => ['application/json' => [
+                'schema' => ['type' => 'object', 'properties' => ['active' => ['type' => 'boolean']]],
+            ]]],
+            ['name' => 'X-Label', 'in' => 'header', 'content' => ['text/plain' => ['schema' => ['type' => 'string']]]],
+        ], '/items');
+
+        $sdk->inspect(...['filter' => ['active' => true], 'X-Label' => 'daily report']);
+
+        self::assertSame('https://example.test/items?filter=%7B%22active%22%3Atrue%7D', $transport->lastRequest->url);
+        self::assertSame('daily report', $transport->lastRequest->headers['X-Label']);
+    }
+
     public function testPaginationRejectsCrossOriginNextLink(): void
     {
         $transport = new FakeTransport(new Response(200, ['Link' => '<https://other.example.test/items?page=2>; rel="next"'], '[]'));
