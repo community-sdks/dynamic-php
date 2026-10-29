@@ -5,7 +5,7 @@ namespace CommunitySDKs\Tests;
 
 use CommunitySDKs\Client;
 use CommunitySDKs\Exception\{ApiException, SdkException, ValidationException};
-use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, Request, Response, Upload};
+use CommunitySDKs\Http\{HttpMiddleware, MetricsMiddleware, MiddlewareTransport, Request, Response, Upload};
 use CommunitySDKs\OpenApi\Registry;
 use CommunitySDKs\Security\OAuthTokenProvider;
 use CommunitySDKs\OpenApi\Document;
@@ -443,6 +443,23 @@ final class ClientTest extends TestCase
         $sdk->streamEvents('events', static function (array $event): void {});
 
         self::assertSame('streamed', $inner->requests[0]->headers['X-Middleware']);
+    }
+
+    public function testMetricsMiddlewareReportsResponseAndDuration(): void
+    {
+        $inner = new FakeTransport(new Response(204));
+        $recorded = [];
+        $middleware = new MetricsMiddleware(static function (Request $request, ?Response $response, float $duration, ?Throwable $error) use (&$recorded): void {
+            $recorded = [$request->method, $response?->status, $duration, $error];
+        });
+        $transport = new MiddlewareTransport($inner, [$middleware]);
+
+        $transport->send(new Request('GET', 'https://example.test/'));
+
+        self::assertSame('GET', $recorded[0]);
+        self::assertSame(204, $recorded[1]);
+        self::assertGreaterThanOrEqual(0, $recorded[2]);
+        self::assertNull($recorded[3]);
     }
 
     public function testDownloadWritesChunksToTargetFile(): void
