@@ -221,6 +221,24 @@ final class ClientTest extends TestCase
         self::assertSame('https://example.test/items?page=2', $transport->lastRequest->url);
     }
 
+    public function testPaginationResolvesQueryRelativeLinksAndPreservesApiKey(): void
+    {
+        $transport = new FakeTransport(responses: [
+            new Response(200, ['Content-Type' => 'application/json', 'Link' => '<?cursor=next&api_key=untrusted>; rel="next"'], '[]'),
+            new Response(200, ['Content-Type' => 'application/json'], '[]'),
+        ]);
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'security' => [['apiKey' => []]],
+            'components' => ['securitySchemes' => ['apiKey' => ['type' => 'apiKey', 'in' => 'query', 'name' => 'api_key']]],
+            'paths' => ['/items' => ['get' => ['operationId' => 'listItems', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport, credentials: ['apiKey' => 'trusted']);
+
+        iterator_to_array($sdk->paginate('listItems'));
+
+        self::assertSame('https://example.test/items?cursor=next&api_key=trusted', $transport->lastRequest->url);
+    }
+
     public function testPaginationRejectsCrossOriginNextLink(): void
     {
         $transport = new FakeTransport(new Response(200, ['Link' => '<https://other.example.test/items?page=2>; rel="next"'], '[]'));

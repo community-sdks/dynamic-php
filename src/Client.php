@@ -130,9 +130,7 @@ readonly class Client
         $unknown = array_diff(array_keys($arguments), array_keys($used));
         if ($unknown !== []) throw new ValidationException(['Unknown arguments: '.implode(', ', $unknown)]);
         $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies);
-        if ($cookies !== []) {
-            $headers['Cookie'] = isset($headers['Cookie']) ? $headers['Cookie'].'; '.implode('; ', $cookies) : implode('; ', $cookies);
-        }
+        $this->mergeCookies($headers, $cookies);
         $url = $this->baseUrl.'/'.ltrim($path, '/');
         if ($query !== []) $url .= '?'.implode('&', $query);
         return [$op, new Request($op['_method'], $url, $headers, $body)];
@@ -237,12 +235,14 @@ readonly class Client
     {
         $op = $this->registry->get($operationId);
         if ($op['_method'] !== 'GET') throw new SdkException('Automatic Link-header pagination is only available for GET operations.');
-        $result = $this->call($operationId, $arguments);
+        [$op, $request] = $this->buildRequest($operationId, $arguments);
+        $currentUrl = $request->url;
+        $result = $this->resultFor($op, $this->transport->send($request));
         while (true) {
             yield $result;
             $link = $this->nextLink($result->headers);
             if ($link === null) return;
-            $url = $this->sameOriginNextUrl($link);
+            $url = $this->sameOriginNextUrl($link, $currentUrl);
             $headers = $this->defaultHeaders;
             foreach ($op['_parameters'] as $parameter) {
                 $name = $parameter['name'];
@@ -251,8 +251,9 @@ readonly class Client
             }
             $query = $cookies = [];
             $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies);
-            if ($query !== []) $url .= (str_contains($url, '?') ? '&' : '?').implode('&', $query);
-            if ($cookies !== []) $headers['Cookie'] = isset($headers['Cookie']) ? $headers['Cookie'].'; '.implode('; ', $cookies) : implode('; ', $cookies);
+            if ($query !== []) $url = $this->appendSecurityQuery($url, $query);
+            $this->mergeCookies($headers, $cookies);
+            $currentUrl = $url;
             $result = $this->resultFor($op, $this->transport->send(new Request('GET', $url, $headers)));
         }
     }
@@ -283,15 +284,33 @@ readonly class Client
         return null;
     }
 
-    private function sameOriginNextUrl(string $link): string
+    private function sameOriginNextUrl(string $link, string $currentUrl): string
     {
         $base = parse_url($this->baseUrl);
+        if (preg_match('/[\x00-\x20\\\\]/', $link)) throw new SdkException('Invalid pagination next link.');
         $parts = parse_url($link);
         if (!is_array($parts)) throw new SdkException('Invalid pagination next link.');
         if (!isset($parts['scheme'])) {
             if (str_starts_with($link, '//')) throw new SdkException('Pagination next links must be same-origin.');
-            if (!str_starts_with($link, '/')) throw new SdkException('Pagination next links must be absolute or root-relative.');
-            $link = $this->origin($base).$link;
+            $current = parse_url($currentUrl);
+            if (!is_array($current)) throw new SdkException('Invalid current pagination URL.');
+            if (str_starts_with($link, '/')) {
+                $link = $this->origin($base).$link;
+            } elseif (str_starts_with($link, '?')) {
+                $link = $this->origin($current).($current['path'] ?? '/').$link;
+            } else {
+                $path = $current['path'] ?? '/';
+                $directory = substr($path, 0, (int) strrpos($path, '/') + 1);
+                $relative = explode('?', $link, 2)[0];
+                $segments = [];
+                foreach (explode('/', $directory.$relative) as $segment) {
+                    if ($segment === '' || $segment === '.') continue;
+                    if ($segment === '..') array_pop($segments);
+                    else $segments[] = $segment;
+                }
+                $suffix = str_contains($link, '?') ? '?'.explode('?', $link, 2)[1] : '';
+                $link = $this->origin($current).'/'.implode('/', $segments).$suffix;
+            }
             $parts = parse_url($link);
         }
         if (isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment']) || !is_array($base) || !is_array($parts)) {
@@ -305,6 +324,38 @@ readonly class Client
             throw new SdkException('Pagination next links must be same-origin.');
         }
         return $link;
+    }
+
+    /** @param list<string> $query */
+    private function appendSecurityQuery(string $url, array $query): string
+    {
+        $question = strpos($url, '?');
+        $path = $question === false ? $url : substr($url, 0, $question);
+        $existing = $question === false ? [] : explode('&', substr($url, $question + 1));
+        foreach ($query as $pair) {
+            [$name] = explode('=', $pair, 2);
+            $decodedName = rawurldecode($name);
+            $existing = array_values(array_filter($existing, static function (string $existingPair) use ($decodedName): bool {
+                [$existingName] = explode('=', $existingPair, 2);
+                return rawurldecode($existingName) !== $decodedName;
+            }));
+            $existing[] = $pair;
+        }
+        return $existing === [] ? $path : $path.'?'.implode('&', $existing);
+    }
+
+    /** @param array<string,string> $headers @param list<string> $cookies */
+    private function mergeCookies(array &$headers, array $cookies): void
+    {
+        if ($cookies === []) return;
+        $existing = '';
+        foreach (array_keys($headers) as $name) {
+            if (strcasecmp($name, 'Cookie') === 0) {
+                $existing = $headers[$name];
+                unset($headers[$name]);
+            }
+        }
+        $headers['Cookie'] = $existing === '' ? implode('; ', $cookies) : $existing.'; '.implode('; ', $cookies);
     }
 
     /** @param array<string,mixed> $base */
