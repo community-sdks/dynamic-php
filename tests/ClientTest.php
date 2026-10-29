@@ -6,6 +6,7 @@ namespace CommunitySDKs\Tests;
 use CommunitySDKs\Client;
 use CommunitySDKs\Exception\{ApiException, SdkException, ValidationException};
 use CommunitySDKs\Http\Response;
+use CommunitySDKs\OpenApi\Document;
 use PHPUnit\Framework\TestCase;
 
 final class ClientTest extends TestCase
@@ -13,6 +14,62 @@ final class ClientTest extends TestCase
     private function sdk(FakeTransport $transport): Client
     {
         return Client::fromFile(dirname(__DIR__).'/specs/jsonplaceholder.openapi.json', transport: $transport);
+    }
+
+    /** @param list<array<string,mixed>> $parameters */
+    private function parameterSdk(FakeTransport $transport, array $parameters, string $path = '/items/{id}'): Client
+    {
+        return new Client(new Document([
+            'openapi' => '3.1.0',
+            'servers' => [['url' => 'https://example.test']],
+            'paths' => [$path => ['get' => [
+                'operationId' => 'inspect',
+                'parameters' => $parameters,
+                'responses' => ['200' => ['description' => 'ok']],
+            ]]],
+        ]), transport: $transport);
+    }
+
+    public function testQuerySerializationSupportsExplodedArraysAndDeepObjects(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = $this->parameterSdk($transport, [
+            ['name' => 'tags', 'in' => 'query', 'schema' => ['type' => 'array', 'items' => ['type' => 'string']]],
+            ['name' => 'filter', 'in' => 'query', 'style' => 'deepObject', 'explode' => true, 'schema' => ['type' => 'object']],
+        ], '/items');
+
+        $sdk->inspect(tags: ['red', 'blue'], filter: ['active' => true]);
+
+        self::assertSame('https://example.test/items?tags=red&tags=blue&filter%5Bactive%5D=1', $transport->lastRequest->url);
+    }
+
+    public function testPathStylesAndCookieParameters(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = $this->parameterSdk($transport, [
+            ['name' => 'id', 'in' => 'path', 'required' => true, 'style' => 'matrix', 'schema' => ['type' => 'string']],
+            ['name' => 'tag', 'in' => 'cookie', 'schema' => ['type' => 'array', 'items' => ['type' => 'string']]],
+        ]);
+
+        $sdk->inspect(id: 'a/b', tag: ['one', 'two']);
+
+        self::assertSame('https://example.test/items/;id=a%2Fb', $transport->lastRequest->url);
+        self::assertSame('tag=one; tag=two', $transport->lastRequest->headers['Cookie']);
+    }
+
+    public function testDelimitedQueryStylesAndExplodedHeaderObject(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = $this->parameterSdk($transport, [
+            ['name' => 'labels', 'in' => 'query', 'style' => 'spaceDelimited', 'explode' => false, 'schema' => ['type' => 'array']],
+            ['name' => 'flags', 'in' => 'query', 'style' => 'pipeDelimited', 'explode' => false, 'schema' => ['type' => 'array']],
+            ['name' => 'metadata', 'in' => 'header', 'explode' => true, 'schema' => ['type' => 'object']],
+        ], '/items');
+
+        $sdk->inspect(labels: ['red', 'blue'], flags: ['a', 'b'], metadata: ['role' => 'admin user']);
+
+        self::assertSame('https://example.test/items?labels=red%20blue&flags=a%7Cb', $transport->lastRequest->url);
+        self::assertSame('role=admin user', $transport->lastRequest->headers['metadata']);
     }
 
     public function testNamedArgumentsAndPathEncoding(): void

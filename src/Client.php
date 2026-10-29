@@ -7,13 +7,14 @@ use CommunitySDKs\Exception\ApiException;
 use CommunitySDKs\Exception\SdkException;
 use CommunitySDKs\Exception\ValidationException;
 use CommunitySDKs\Http\{Request, Result, Response, StreamTransport, Transport};
-use CommunitySDKs\OpenApi\{Document, Registry, Validator};
+use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, Validator};
 
 /** Universal operationId client. No endpoint-specific PHP classes are created. */
 readonly class Client
 {
     private Registry $registry;
     private Validator $validator;
+    private ParameterSerializer $parameterSerializer;
     private Transport $transport;
     private string $baseUrl;
 
@@ -28,6 +29,7 @@ readonly class Client
     ) {
         $this->registry = new Registry($document);
         $this->validator = new Validator($document);
+        $this->parameterSerializer = new ParameterSerializer();
         $this->transport = $transport ?? new StreamTransport();
         $server = $baseUrl ?? ($document->data['servers'][0]['url'] ?? null);
         if (!is_string($server) || !preg_match('~^https?://~i', $server)) {
@@ -55,6 +57,7 @@ readonly class Client
         $op = $this->registry->get($operationId);
         $path = $op['_path'];
         $query = [];
+        $cookies = [];
         $headers = $this->defaultHeaders;
         $used = [];
         foreach ($op['_parameters'] as $parameter) {
@@ -68,21 +71,17 @@ readonly class Client
             $value = $arguments[$name];
             if (isset($parameter['schema'])) $this->validator->assert($value, $parameter['schema'], '$.'.$name);
             if ($place === 'path') {
-                if (!is_scalar($value)) throw new ValidationException(["{$name}: path parameter must be scalar"]);
-                $path = str_replace('{'.$name.'}', rawurlencode((string)$value), $path);
+                $path = str_replace('{'.$name.'}', $this->parameterSerializer->path($parameter, $value), $path);
             } elseif ($place === 'query') {
-                if (is_array($value)) {
-                    // Standard form-style query arrays; deepObject and exotic styles unsupported.
-                    $query[$name] = $value;
-                } elseif (is_scalar($value)) {
-                    $query[$name] = $value;
-                } else throw new ValidationException(["{$name}: unsupported query value"]);
+                array_push($query, ...$this->parameterSerializer->query($parameter, $value));
             } elseif ($place === 'header') {
-                if (!is_scalar($value) || preg_match('/[\r\n]/', (string)$value)) throw new ValidationException(["{$name}: invalid header"]);
-                $headers[$name] = (string)$value;
+                $headers[$name] = $this->parameterSerializer->header($parameter, $value);
             } elseif ($place === 'cookie') {
-                throw new SdkException('Cookie parameters are not implemented yet.');
+                array_push($cookies, ...$this->parameterSerializer->cookie($parameter, $value));
             }
+        }
+        if ($cookies !== []) {
+            $headers['Cookie'] = isset($headers['Cookie']) ? $headers['Cookie'].'; '.implode('; ', $cookies) : implode('; ', $cookies);
         }
         if (str_contains($path, '{')) throw new SdkException('Unresolved path parameter.');
         $body = '';
@@ -106,7 +105,7 @@ readonly class Client
             $headers['Authorization'] = 'Bearer '.$this->token;
         }
         $url = $this->baseUrl.'/'.ltrim($path, '/');
-        if ($query !== []) $url .= '?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        if ($query !== []) $url .= '?'.implode('&', $query);
         $response = $this->transport->send(new Request($op['_method'], $url, $headers, $body));
         $decoded = $this->decode($response);
         $schema = $this->responseSchema($op, $response);
