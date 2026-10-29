@@ -66,7 +66,7 @@ final class ParameterSerializer
         }
 
         $pairs = $this->pairs($name, $value);
-        $flat = implode(',', array_merge(...array_map(static fn (array $pair): array => $pair, $pairs)));
+        $flat = $pairs === [] ? '' : implode(',', array_merge(...array_map(static fn (array $pair): array => $pair, $pairs)));
         return match ($style) {
             'simple' => $explode
                 ? implode(',', array_map(static fn (array $pair): string => $pair[0].'='.$pair[1], $pairs))
@@ -125,7 +125,7 @@ final class ParameterSerializer
         if ($explode) {
             return array_map(static fn (array $pair): string => $pair[0].'='.$pair[1], $pairs);
         }
-        $flat = implode(',', array_merge(...array_map(static fn (array $pair): array => $pair, $pairs)));
+        $flat = $pairs === [] ? '' : implode(',', array_merge(...array_map(static fn (array $pair): array => $pair, $pairs)));
         return [$encodedName.'='.$flat];
     }
 
@@ -181,7 +181,7 @@ final class ParameterSerializer
         $pairs = $this->pairs($name, $value);
         return $explode
             ? array_map(static fn (array $pair): string => $pair[0].'='.$pair[1], $pairs)
-            : [$encodedName.'='.implode(',', array_merge(...array_map(static fn (array $pair): array => $pair, $pairs)))];
+            : [$encodedName.'='.($pairs === [] ? '' : implode(',', array_merge(...array_map(static fn (array $pair): array => $pair, $pairs))))];
     }
 
     private function encodeValue(string $name, mixed $value, bool $allowReserved = false): string

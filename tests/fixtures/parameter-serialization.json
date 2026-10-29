@@ -19,16 +19,52 @@
       "expected": ["tags=red%7Cblue"]
     },
     {
+      "location": "query",
+      "parameter": {"name": "filter", "in": "query", "style": "form", "explode": true},
+      "value": {"role": "admin", "active": true},
+      "expected": ["role=admin", "active=true"]
+    },
+    {
+      "location": "query",
+      "parameter": {"name": "filter", "in": "query", "style": "form", "explode": false},
+      "value": {"role": "admin", "active": true},
+      "expected": ["filter=role,admin,active,true"]
+    },
+    {
+      "location": "query",
+      "parameter": {"name": "q", "in": "query", "allowReserved": true},
+      "value": "a/b?c#d",
+      "expected": ["q=a/b?c%23d"]
+    },
+    {
       "location": "path",
       "parameter": {"name": "id", "in": "path", "style": "matrix", "explode": false},
       "value": "a/b",
       "expected": ";id=a%2Fb"
     },
     {
+      "location": "path",
+      "parameter": {"name": "tags", "in": "path", "style": "label", "explode": true},
+      "value": ["red", "blue"],
+      "expected": ".red.blue"
+    },
+    {
+      "location": "path",
+      "parameter": {"name": "filter", "in": "path", "style": "matrix", "explode": true},
+      "value": {"role": "admin", "active": true},
+      "expected": ";role=admin;active=true"
+    },
+    {
       "location": "cookie",
       "parameter": {"name": "tag", "in": "cookie", "style": "form", "explode": true},
       "value": ["one", "two"],
       "expected": ["tag=one", "tag=two"]
+    },
+    {
+      "location": "cookie",
+      "parameter": {"name": "filter", "in": "cookie", "style": "form", "explode": true},
+      "value": {"role": "admin", "active": true},
+      "expected": ["role=admin", "active=true"]
     },
     {
       "location": "header",
