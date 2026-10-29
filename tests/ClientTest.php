@@ -480,6 +480,60 @@ final class ClientTest extends TestCase
         }
     }
 
+    public function testResumableDownloadFetchesAndVerifiesByteRanges(): void
+    {
+        $transport = new FakeTransport(responses: [
+            new Response(206, ['Content-Range' => 'bytes 0-3/8', 'ETag' => '"v1"'], 'ABCD'),
+            new Response(206, ['Content-Range' => 'bytes 4-7/8', 'ETag' => '"v1"'], 'EFGH'),
+        ]);
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/file' => ['get' => ['operationId' => 'file', 'responses' => ['206' => ['description' => 'partial']]]]],
+        ]), transport: $transport);
+        $target = sys_get_temp_dir().DIRECTORY_SEPARATOR.'community-sdk-resume-'.bin2hex(random_bytes(6));
+
+        try {
+            $sdk->downloadResumable('file', $target, rangeSize: 4);
+            self::assertSame('ABCDEFGH', file_get_contents($target));
+            self::assertSame('bytes=0-3', $transport->requests[0]->headers['Range']);
+            self::assertSame('bytes=4-7', $transport->requests[1]->headers['Range']);
+            self::assertSame('"v1"', $transport->requests[1]->headers['If-Range']);
+        } finally {
+            foreach ([$target, $target.'.part', $target.'.part.json'] as $path) if (is_file($path)) unlink($path);
+        }
+    }
+
+    public function testResumableDownloadContinuesAfterRetryableApiError(): void
+    {
+        $transport = new FakeTransport(responses: [
+            new Response(206, ['Content-Range' => 'bytes 0-3/8', 'ETag' => '"v1"'], 'ABCD'),
+            new Response(503, ['Retry-After' => '0']),
+        ]);
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/file' => ['get' => ['operationId' => 'file', 'responses' => ['206' => ['description' => 'partial'], '503' => ['description' => 'retry']]]]],
+        ]), transport: $transport);
+        $target = sys_get_temp_dir().DIRECTORY_SEPARATOR.'community-sdk-resume-'.bin2hex(random_bytes(6));
+        try {
+            try {
+                $sdk->downloadResumable('file', $target, rangeSize: 4);
+                self::fail('Expected an API failure for the second range.');
+            } catch (ApiException) {
+                self::assertSame('ABCD', file_get_contents($target.'.part'));
+            }
+            $transport = new FakeTransport(responses: [new Response(206, ['Content-Range' => 'bytes 4-7/8', 'ETag' => '"v1"'], 'EFGH')]);
+            $sdk = new Client(new Document([
+                'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+                'paths' => ['/file' => ['get' => ['operationId' => 'file', 'responses' => ['206' => ['description' => 'partial']]]]],
+            ]), transport: $transport);
+            $sdk->downloadResumable('file', $target, rangeSize: 4);
+            self::assertSame('bytes=4-7', $transport->lastRequest->headers['Range']);
+            self::assertSame('ABCDEFGH', file_get_contents($target));
+        } finally {
+            foreach ([$target, $target.'.part', $target.'.part.json'] as $path) if (is_file($path)) unlink($path);
+        }
+    }
+
     public function testNamedArgumentsAndPathEncoding(): void
     {
         $transport = new FakeTransport(new Response(200, ['Content-Type'=>'application/json'], '{"id":1,"title":"Hi","body":"Text","userId":2}'));

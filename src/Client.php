@@ -198,6 +198,116 @@ readonly class Client
         }
     }
 
+    /** @param array<string,mixed> $arguments */
+    public function downloadResumable(string $operationId, string $target, array $arguments = [], int $rangeSize = 1_048_576): Result
+    {
+        if ($rangeSize < 1) throw new \InvalidArgumentException('Range size must be positive.');
+        [$op, $request] = $this->buildRequest($operationId, $arguments);
+        if ($op['_method'] !== 'GET') throw new SdkException('Downloads are only supported for GET operations.');
+        $directory = dirname($target);
+        if (!is_dir($directory) || !is_writable($directory)) throw new SdkException('Download target directory must exist and be writable.');
+
+        $partial = $target.'.part';
+        $metadataPath = $partial.'.json';
+        $urlHash = hash('sha256', $request->url);
+        $metadata = $this->readDownloadMetadata($metadataPath, $urlHash);
+        if ($metadata === null) {
+            if (is_file($partial)) unlink($partial);
+            $metadata = ['url' => $urlHash, 'total' => null, 'etag' => null];
+            $this->writeDownloadMetadata($metadataPath, $metadata);
+        }
+        $offset = is_file($partial) ? filesize($partial) : 0;
+        if (!is_int($offset)) $offset = 0;
+        $lastResult = null;
+
+        while (true) {
+            $headers = $request->headers;
+            $headers['Range'] = 'bytes='.$offset.'-'.($offset + $rangeSize - 1);
+            if (is_string($metadata['etag'] ?? null) && $metadata['etag'] !== '') $headers['If-Range'] = $metadata['etag'];
+            $response = $this->transport->send(new Request('GET', $request->url, $headers));
+
+            if ($response->status === 200) {
+                if (file_put_contents($partial, $response->body, LOCK_EX) !== strlen($response->body)) {
+                    throw new SdkException('Could not write complete download response.');
+                }
+                $lastResult = $this->resultFor($op, $response);
+                $this->finishResumableDownload($partial, $metadataPath, $target);
+                return $lastResult;
+            }
+            if ($response->status === 416) {
+                $range = $response->header('Content-Range') ?? '';
+                if ($metadata['total'] !== null && $offset === $metadata['total'] && preg_match('/^bytes \*\/(\d+)$/i', $range, $match) === 1 && (int) $match[1] === $offset) {
+                    if ($lastResult === null) throw new SdkException('A completed partial download has no response result.');
+                    $this->finishResumableDownload($partial, $metadataPath, $target);
+                    return $lastResult;
+                }
+                return $this->resultFor($op, $response);
+            }
+            if ($response->status !== 206) return $this->resultFor($op, $response);
+            $contentRange = $response->header('Content-Range') ?? '';
+            if (preg_match('/^bytes (\d+)-(\d+)\/(\d+)$/i', $contentRange, $match) !== 1) {
+                throw new SdkException('Range response has an invalid Content-Range header.');
+            }
+            $start = (int) $match[1];
+            $end = (int) $match[2];
+            $total = (int) $match[3];
+            if ($start !== $offset || $end < $start || $end >= $total || strlen($response->body) !== $end - $start + 1) {
+                throw new SdkException('Range response does not match the requested byte interval.');
+            }
+            if ($metadata['total'] !== null && $metadata['total'] !== $total) {
+                throw new SdkException('Download size changed while resuming.');
+            }
+            if ($offset === 0 && is_string($response->header('ETag'))) $metadata['etag'] = $response->header('ETag');
+            $metadata['total'] = $total;
+            if (file_put_contents($partial, $response->body, FILE_APPEND | LOCK_EX) !== strlen($response->body)) {
+                throw new SdkException('Could not append download range.');
+            }
+            $offset = $end + 1;
+            $this->writeDownloadMetadata($metadataPath, $metadata);
+            $lastResult = $this->resultFor($op, $response);
+            if ($offset === $total) {
+                $this->finishResumableDownload($partial, $metadataPath, $target);
+                return $lastResult;
+            }
+        }
+    }
+
+    /** @return array{url:string,total:?int,etag:?string}|null */
+    private function readDownloadMetadata(string $path, string $urlHash): ?array
+    {
+        if (!is_file($path) || !is_readable($path)) return null;
+        $raw = file_get_contents($path);
+        if (!is_string($raw)) return null;
+        try {
+            $metadata = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
+        if (!is_array($metadata) || ($metadata['url'] ?? null) !== $urlHash) return null;
+        $total = $metadata['total'] ?? null;
+        $etag = $metadata['etag'] ?? null;
+        if ($total !== null && (!is_int($total) || $total < 0)) return null;
+        if ($etag !== null && !is_string($etag)) return null;
+        return ['url' => $urlHash, 'total' => $total, 'etag' => $etag];
+    }
+
+    /** @param array{url:string,total:?int,etag:?string} $metadata */
+    private function writeDownloadMetadata(string $path, array $metadata): void
+    {
+        $temporary = $path.'.tmp';
+        $json = json_encode($metadata, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        if (file_put_contents($temporary, $json, LOCK_EX) !== strlen($json) || !rename($temporary, $path)) {
+            if (is_file($temporary)) unlink($temporary);
+            throw new SdkException('Could not persist resumable download metadata.');
+        }
+    }
+
+    private function finishResumableDownload(string $partial, string $metadata, string $target): void
+    {
+        if (!rename($partial, $target)) throw new SdkException('Could not move completed download into place.');
+        if (is_file($metadata)) unlink($metadata);
+    }
+
     /** @param array<string,mixed> $arguments @param callable(array{data:string,event:string,id:?string,retry:?int}):void $onEvent */
     public function streamEvents(string $operationId, callable $onEvent, array $arguments = [], int $chunkSize = 8192): Result
     {
