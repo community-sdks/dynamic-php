@@ -281,6 +281,42 @@ final class ClientTest extends TestCase
         self::assertSame('active', $inner->lastRequest->headers['X-Middleware']);
     }
 
+    public function testSseParserHandlesChunkBoundariesAndMultilineData(): void
+    {
+        $transport = new FakeStreamingTransport([
+            "id: 42\nevent: update\ndata: hello",
+            "\ndata: world\n\n:keepalive\n\n",
+        ], new Response(200, ['Content-Type' => 'text/event-stream; charset=utf-8']));
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/events' => ['get' => ['operationId' => 'events', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport);
+        $events = [];
+
+        $sdk->streamEvents('events', static function (array $event) use (&$events): void { $events[] = $event; });
+
+        self::assertSame([['data' => "hello\nworld", 'event' => 'update', 'id' => '42', 'retry' => null]], $events);
+        self::assertSame('text/event-stream', $transport->requests[0]->headers['Accept']);
+    }
+
+    public function testDownloadWritesChunksToTargetFile(): void
+    {
+        $transport = new FakeStreamingTransport(["\x00\xFF", 'payload'], new Response(200, ['Content-Type' => 'application/octet-stream']));
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/file' => ['get' => ['operationId' => 'file', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport);
+        $target = sys_get_temp_dir().DIRECTORY_SEPARATOR.'community-sdk-download-'.bin2hex(random_bytes(6));
+
+        try {
+            $result = $sdk->download('file', $target);
+            self::assertSame(200, $result->status);
+            self::assertSame("\x00\xFFpayload", file_get_contents($target));
+        } finally {
+            if (is_file($target)) unlink($target);
+        }
+    }
+
     public function testNamedArgumentsAndPathEncoding(): void
     {
         $transport = new FakeTransport(new Response(200, ['Content-Type'=>'application/json'], '{"id":1,"title":"Hi","body":"Text","userId":2}'));

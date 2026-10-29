@@ -6,7 +6,7 @@ namespace CommunitySDKs;
 use CommunitySDKs\Exception\ApiException;
 use CommunitySDKs\Exception\SdkException;
 use CommunitySDKs\Exception\ValidationException;
-use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, Request, Result, Response, RetryingTransport, StreamTransport, Transport};
+use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, Request, Result, Response, RetryingTransport, StreamTransport, StreamingTransport, Transport};
 use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, RequestBodySerializer, SecurityResolver, Validator};
 
 /** Universal operationId client. No endpoint-specific PHP classes are created. */
@@ -18,6 +18,7 @@ readonly class Client
     private RequestBodySerializer $requestBodySerializer;
     private SecurityResolver $securityResolver;
     private Transport $transport;
+    private ?StreamingTransport $streamingTransport;
     private string $baseUrl;
 
     /** @param array<string,string> $defaultHeaders */
@@ -40,6 +41,7 @@ readonly class Client
         $this->requestBodySerializer = new RequestBodySerializer();
         $this->securityResolver = new SecurityResolver($document);
         $configuredTransport = $transport ?? new StreamTransport();
+        $this->streamingTransport = $configuredTransport instanceof StreamingTransport ? $configuredTransport : null;
         if ($middleware !== []) $configuredTransport = new MiddlewareTransport($configuredTransport, $middleware);
         if ($maxRetries > 0) $configuredTransport = new RetryingTransport($configuredTransport, $maxRetries);
         $this->transport = $configuredTransport;
@@ -74,6 +76,13 @@ readonly class Client
 
     /** @param array<string,mixed> $arguments */
     public function call(string $operationId, array $arguments = []): Result
+    {
+        [$op, $request] = $this->buildRequest($operationId, $arguments);
+        return $this->resultFor($op, $this->transport->send($request));
+    }
+
+    /** @param array<string,mixed> $arguments @return array{0:array<string,mixed>,1:Request} */
+    private function buildRequest(string $operationId, array $arguments): array
     {
         $op = $this->registry->get($operationId);
         $path = $op['_path'];
@@ -126,7 +135,100 @@ readonly class Client
         }
         $url = $this->baseUrl.'/'.ltrim($path, '/');
         if ($query !== []) $url .= '?'.implode('&', $query);
-        $response = $this->transport->send(new Request($op['_method'], $url, $headers, $body));
+        return [$op, new Request($op['_method'], $url, $headers, $body)];
+    }
+
+    /** @param array<string,mixed> $arguments @return Result */
+    public function download(string $operationId, string $target, array $arguments = [], int $chunkSize = 16384): Result
+    {
+        if ($this->streamingTransport === null) throw new SdkException('Download requires a StreamingTransport.');
+        if ($chunkSize < 1) throw new \InvalidArgumentException('Chunk size must be positive.');
+        [$op, $request] = $this->buildRequest($operationId, $arguments);
+        if ($op['_method'] !== 'GET') throw new SdkException('Downloads are only supported for GET operations.');
+        $directory = dirname($target);
+        if (!is_dir($directory) || !is_writable($directory)) throw new SdkException('Download target directory must exist and be writable.');
+        $temporary = tempnam($directory, '.community-sdk-');
+        if ($temporary === false) throw new SdkException('Could not create temporary download file.');
+        $file = fopen($temporary, 'wb');
+        if ($file === false) {
+            unlink($temporary);
+            throw new SdkException('Could not open temporary download file.');
+        }
+        try {
+            $response = $this->streamingTransport->stream($request, static function (string $chunk) use ($file): void {
+                $offset = 0;
+                while ($offset < strlen($chunk)) {
+                    $written = fwrite($file, substr($chunk, $offset));
+                    if ($written === false || $written === 0) throw new SdkException('Could not write downloaded data.');
+                    $offset += $written;
+                }
+            }, $chunkSize);
+            fclose($file);
+            $result = $this->resultFor($op, $response);
+            if (!rename($temporary, $target)) throw new SdkException('Could not move completed download into place.');
+            return $result;
+        } catch (\Throwable $e) {
+            if (is_resource($file)) fclose($file);
+            if (is_file($temporary)) unlink($temporary);
+            throw $e;
+        }
+    }
+
+    /** @param array<string,mixed> $arguments @param callable(array{data:string,event:string,id:?string,retry:?int}):void $onEvent */
+    public function streamEvents(string $operationId, callable $onEvent, array $arguments = [], int $chunkSize = 8192): Result
+    {
+        if ($this->streamingTransport === null) throw new SdkException('SSE requires a StreamingTransport.');
+        [$op, $request] = $this->buildRequest($operationId, $arguments);
+        if ($op['_method'] !== 'GET') throw new SdkException('Server-sent events require a GET operation.');
+        $headers = $request->headers;
+        $hasAccept = false;
+        foreach (array_keys($headers) as $name) if (strcasecmp($name, 'Accept') === 0) $hasAccept = true;
+        if (!$hasAccept) $headers['Accept'] = 'text/event-stream';
+        $request = new Request($request->method, $request->url, $headers, $request->body);
+        $buffer = '';
+        /** @var array{data:list<string>,event:string,id:?string,retry:?int} $event */
+        $event = ['data' => [], 'event' => 'message', 'id' => null, 'retry' => null];
+        $dispatch = static function () use (&$event, $onEvent): void {
+            if ($event['data'] !== []) $onEvent([
+                'data' => implode("\n", $event['data']),
+                'event' => $event['event'],
+                'id' => $event['id'],
+                'retry' => $event['retry'],
+            ]);
+            $event = ['data' => [], 'event' => 'message', 'id' => null, 'retry' => null];
+        };
+        $response = $this->streamingTransport->stream($request, static function (string $chunk) use (&$buffer, &$event, $dispatch): void {
+            $buffer .= $chunk;
+            while (($newline = strpos($buffer, "\n")) !== false) {
+                $line = rtrim(substr($buffer, 0, $newline), "\r");
+                $buffer = substr($buffer, $newline + 1);
+                if ($line === '') {
+                    $dispatch();
+                } elseif (!str_starts_with($line, ':')) {
+                    [$field, $value] = array_pad(explode(':', $line, 2), 2, '');
+                    if (str_starts_with($value, ' ')) $value = substr($value, 1);
+                    if ($field === 'data') $event['data'][] = $value;
+                    elseif ($field === 'event') $event['event'] = $value;
+                    elseif ($field === 'id' && !str_contains($value, "\0")) $event['id'] = $value;
+                    elseif ($field === 'retry' && ctype_digit($value)) $event['retry'] = (int) $value;
+                }
+            }
+        }, $chunkSize);
+        if ($buffer !== '') {
+            $buffer .= "\n\n";
+            $line = $buffer;
+            $buffer = '';
+            foreach (explode("\n", str_replace("\r", '', $line)) as $fieldLine) {
+                if (str_starts_with($fieldLine, 'data:')) $event['data'][] = ltrim(substr($fieldLine, 5), ' ');
+                elseif (str_starts_with($fieldLine, 'event:')) $event['event'] = ltrim(substr($fieldLine, 6), ' ');
+                elseif (str_starts_with($fieldLine, 'id:')) $event['id'] = ltrim(substr($fieldLine, 3), ' ');
+                elseif (str_starts_with($fieldLine, 'retry:') && ctype_digit(trim(substr($fieldLine, 6)))) $event['retry'] = (int) trim(substr($fieldLine, 6));
+            }
+            $dispatch();
+        }
+        if ($response->status < 400 && $response->contentType() !== 'text/event-stream') {
+            throw new SdkException('Expected a text/event-stream response.');
+        }
         return $this->resultFor($op, $response);
     }
 
