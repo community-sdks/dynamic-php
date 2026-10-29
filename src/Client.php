@@ -41,8 +41,8 @@ readonly class Client
         $this->requestBodySerializer = new RequestBodySerializer();
         $this->securityResolver = new SecurityResolver($document);
         $configuredTransport = $transport ?? new StreamTransport();
-        $this->streamingTransport = $configuredTransport instanceof StreamingTransport ? $configuredTransport : null;
         if ($middleware !== []) $configuredTransport = new MiddlewareTransport($configuredTransport, $middleware);
+        $this->streamingTransport = $configuredTransport instanceof StreamingTransport ? $configuredTransport : null;
         if ($maxRetries > 0) $configuredTransport = new RetryingTransport($configuredTransport, $maxRetries);
         $this->transport = $configuredTransport;
         $server = $baseUrl ?? ($document->data['servers'][0]['url'] ?? null);

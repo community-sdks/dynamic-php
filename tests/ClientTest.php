@@ -334,6 +334,27 @@ final class ClientTest extends TestCase
         self::assertSame('text/event-stream', $transport->requests[0]->headers['Accept']);
     }
 
+    public function testConfiguredMiddlewareRunsForSseRequests(): void
+    {
+        $inner = new FakeStreamingTransport(['data: event\n\n'], new Response(200, ['Content-Type' => 'text/event-stream']));
+        $middleware = new class implements HttpMiddleware {
+            public function process(Request $request, callable $next): Response
+            {
+                $headers = $request->headers;
+                $headers['X-Middleware'] = 'streamed';
+                return $next(new Request($request->method, $request->url, $headers, $request->body));
+            }
+        };
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/events' => ['get' => ['operationId' => 'events', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $inner, middleware: [$middleware], maxRetries: 1);
+
+        $sdk->streamEvents('events', static function (array $event): void {});
+
+        self::assertSame('streamed', $inner->requests[0]->headers['X-Middleware']);
+    }
+
     public function testDownloadWritesChunksToTargetFile(): void
     {
         $transport = new FakeStreamingTransport(["\x00\xFF", 'payload'], new Response(200, ['Content-Type' => 'application/octet-stream']));
