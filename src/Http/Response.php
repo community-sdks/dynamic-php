@@ -21,4 +21,12 @@ final readonly class Response
         }
         return '';
     }
+
+    public function header(string $name): ?string
+    {
+        foreach ($this->headers as $key => $value) {
+            if (strcasecmp($key, $name) === 0) return $value;
+        }
+        return null;
+    }
 }

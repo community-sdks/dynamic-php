@@ -5,15 +5,16 @@ namespace CommunitySDKs\Tests;
 
 use CommunitySDKs\Client;
 use CommunitySDKs\Exception\{ApiException, SdkException, ValidationException};
-use CommunitySDKs\Http\{Response, Upload};
+use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, Request, Response, Upload};
+use CommunitySDKs\OpenApi\Registry;
 use CommunitySDKs\OpenApi\Document;
 use PHPUnit\Framework\TestCase;
 
 final class ClientTest extends TestCase
 {
-    private function sdk(FakeTransport $transport): Client
+    private function sdk(FakeTransport $transport, int $maxRetries = 0): Client
     {
-        return Client::fromFile(dirname(__DIR__).'/specs/jsonplaceholder.openapi.json', transport: $transport);
+        return Client::fromFile(dirname(__DIR__).'/specs/jsonplaceholder.openapi.json', transport: $transport, maxRetries: $maxRetries);
     }
 
     /** @param list<array<string,mixed>> $parameters */
@@ -201,6 +202,83 @@ final class ClientTest extends TestCase
 
         self::assertSame('https://example.test/secure?api_key=query%20secret', $transport->lastRequest->url);
         self::assertSame('session=cookie%20secret', $transport->lastRequest->headers['Cookie']);
+    }
+
+    public function testPaginationFollowsSameOriginLinkHeader(): void
+    {
+        $transport = new FakeTransport(responses: [
+            new Response(200, ['Content-Type' => 'application/json', 'Link' => '<https://example.test/items?page=2>; rel="next"'], '[1]'),
+            new Response(200, ['Content-Type' => 'application/json'], '[2]'),
+        ]);
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/items' => ['get' => ['operationId' => 'listItems', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport);
+
+        $pages = iterator_to_array($sdk->paginate('listItems'));
+
+        self::assertSame([[1], [2]], array_map(static fn ($page) => $page->data, $pages));
+        self::assertSame('https://example.test/items?page=2', $transport->lastRequest->url);
+    }
+
+    public function testPaginationRejectsCrossOriginNextLink(): void
+    {
+        $transport = new FakeTransport(new Response(200, ['Link' => '<https://other.example.test/items?page=2>; rel="next"'], '[]'));
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/items' => ['get' => ['operationId' => 'listItems', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport);
+
+        $this->expectException(SdkException::class);
+        iterator_to_array($sdk->paginate('listItems'));
+    }
+
+    public function testRetriesTransientErrorsForIdempotentOperations(): void
+    {
+        $transport = new FakeTransport(responses: [
+            new Response(503, ['Retry-After' => '0']),
+            new Response(200, ['Content-Type' => 'application/json'], '{"id":1,"title":"Hi","body":"Text","userId":2}'),
+        ]);
+
+        $result = $this->sdk($transport, 1)->getPost(id: 1);
+
+        self::assertSame(200, $result->status);
+        self::assertSame(2, $transport->sendCount);
+    }
+
+    public function testDoesNotRetryNonIdempotentPostByDefault(): void
+    {
+        $transport = new FakeTransport(responses: [
+            new Response(503, ['Retry-After' => '0']),
+            new Response(201, ['Content-Type' => 'application/json'], '{}'),
+        ]);
+        try {
+            $this->sdk($transport, 2)->createPost(body: ['title' => 'Hi', 'body' => 'Text', 'userId' => 1]);
+            self::fail('Expected the first POST failure to be returned without retry.');
+        } catch (ApiException) {
+            self::assertSame(1, $transport->sendCount);
+        }
+    }
+
+    public function testMiddlewareCanWrapRequests(): void
+    {
+        $inner = new FakeTransport();
+        $middleware = new class implements HttpMiddleware {
+            public bool $called = false;
+            public function process(Request $request, callable $next): Response
+            {
+                $this->called = true;
+                $headers = $request->headers;
+                $headers['X-Middleware'] = 'active';
+                return $next(new Request($request->method, $request->url, $headers, $request->body));
+            }
+        };
+        $transport = new MiddlewareTransport($inner, [$middleware]);
+
+        $transport->send(new Request('GET', 'https://example.test/'));
+
+        self::assertTrue($middleware->called);
+        self::assertSame('active', $inner->lastRequest->headers['X-Middleware']);
     }
 
     public function testNamedArgumentsAndPathEncoding(): void

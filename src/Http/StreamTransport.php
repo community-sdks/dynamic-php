@@ -28,7 +28,7 @@ final readonly class StreamTransport implements Transport
         if ($body === false) {
             throw new TransportException('HTTP connection failed (timeout, DNS or TLS error).');
         }
-        $headers = $http_response_header ?? [];
+        $headers = $http_response_header;
         $status = preg_match('~^HTTP/\S+\s+(\d+)~', $headers[0] ?? '', $m) ? (int) $m[1] : 0;
         $parsed = [];
         foreach (array_slice($headers, 1) as $header) {
