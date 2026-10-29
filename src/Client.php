@@ -433,18 +433,20 @@ readonly class Client
         $result = $this->resultFor($op, $this->transport->send($request));
         $pageCount = 0;
         while (true) {
-            if (++$pageCount > $maxPages) throw new SdkException("Pagination exceeded the maximum page count ({$maxPages}).");
+            $pageCount++;
             yield $result;
             $link = $this->nextLink($result->headers);
             if ($link === null) {
                 $nextArguments = $strategy?->nextArguments($result, $arguments);
                 if ($nextArguments === null) return;
+                if ($pageCount >= $maxPages) throw new SdkException("Pagination exceeded the maximum page count ({$maxPages}).");
                 $arguments = $nextArguments;
                 [$op, $request] = $this->buildRequest($operationId, $arguments);
                 $currentUrl = $request->url;
                 $result = $this->resultFor($op, $this->transport->send($request));
                 continue;
             }
+            if ($pageCount >= $maxPages) throw new SdkException("Pagination exceeded the maximum page count ({$maxPages}).");
             $url = $this->sameOriginNextUrl($link, $currentUrl);
             $headers = $this->defaultHeaders;
             foreach ($op['_parameters'] as $parameter) {

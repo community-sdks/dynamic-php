@@ -251,6 +251,22 @@ final class ClientTest extends TestCase
         self::assertSame('https://example.test/items?cursor=cursor-2', $transport->lastRequest->url);
     }
 
+    public function testPaginationMaximumStopsBeforeSendingExtraRequest(): void
+    {
+        $transport = new FakeTransport(new Response(200, ['Link' => '<https://example.test/items?page=2>; rel="next"'], '[]'));
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/items' => ['get' => ['operationId' => 'listItems', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport);
+
+        try {
+            iterator_to_array($sdk->paginate('listItems', maxPages: 1));
+            self::fail('Expected pagination limit exception.');
+        } catch (SdkException) {
+            self::assertSame(1, $transport->sendCount);
+        }
+    }
+
     public function testPaginationResolvesQueryRelativeLinksAndPreservesApiKey(): void
     {
         $transport = new FakeTransport(responses: [
