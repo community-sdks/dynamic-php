@@ -5,7 +5,7 @@ namespace CommunitySDKs\Tests;
 
 use CommunitySDKs\Client;
 use CommunitySDKs\Exception\{ApiException, SdkException, ValidationException};
-use CommunitySDKs\Http\{HttpMiddleware, MetricsMiddleware, MiddlewareTransport, Request, Response, Upload};
+use CommunitySDKs\Http\{HttpMiddleware, MetricsMiddleware, MiddlewareTransport, PaginationStrategy, Request, Response, Upload};
 use CommunitySDKs\OpenApi\Registry;
 use CommunitySDKs\Security\OAuthTokenProvider;
 use CommunitySDKs\Security\SecurityCredentialProvider;
@@ -221,6 +221,34 @@ final class ClientTest extends TestCase
 
         self::assertSame([[1], [2]], array_map(static fn ($page) => $page->data, $pages));
         self::assertSame('https://example.test/items?page=2', $transport->lastRequest->url);
+    }
+
+    public function testPaginationStrategySupportsCursorApis(): void
+    {
+        $transport = new FakeTransport(responses: [
+            new Response(200, ['Content-Type' => 'application/json'], '[{"id":1,"next":"cursor-2"}]'),
+            new Response(200, ['Content-Type' => 'application/json'], '[{"id":2,"next":null}]'),
+        ]);
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/items' => ['get' => [
+                'operationId' => 'listItems',
+                'parameters' => [['name' => 'cursor', 'in' => 'query', 'schema' => ['type' => 'string']]],
+                'responses' => ['200' => ['description' => 'ok']],
+            ]]],
+        ]), transport: $transport);
+        $strategy = new class implements PaginationStrategy {
+            public function nextArguments(\CommunitySDKs\Http\Result $result, array $currentArguments): ?array
+            {
+                $cursor = $result->data[0]['next'] ?? null;
+                return is_string($cursor) ? array_replace($currentArguments, ['cursor' => $cursor]) : null;
+            }
+        };
+
+        $pages = iterator_to_array($sdk->paginate('listItems', strategy: $strategy));
+
+        self::assertCount(2, $pages);
+        self::assertSame('https://example.test/items?cursor=cursor-2', $transport->lastRequest->url);
     }
 
     public function testPaginationResolvesQueryRelativeLinksAndPreservesApiKey(): void

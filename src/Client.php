@@ -6,7 +6,7 @@ namespace CommunitySDKs;
 use CommunitySDKs\Exception\ApiException;
 use CommunitySDKs\Exception\SdkException;
 use CommunitySDKs\Exception\ValidationException;
-use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, MultipartDecoder, Request, Result, Response, RetryingTransport, StreamTransport, StreamingTransport, Transport};
+use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, MultipartDecoder, PaginationStrategy, Request, Result, Response, RetryingTransport, StreamTransport, StreamingTransport, Transport};
 use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, RequestBodySerializer, SecurityResolver, Validator};
 use CommunitySDKs\Security\OAuthTokenProvider;
 use CommunitySDKs\Security\SecurityCredentialProvider;
@@ -423,17 +423,28 @@ readonly class Client
     }
 
     /** @param array<string,mixed> $arguments @return iterable<Result> */
-    public function paginate(string $operationId, array $arguments = []): iterable
+    public function paginate(string $operationId, array $arguments = [], ?PaginationStrategy $strategy = null, int $maxPages = 1000): iterable
     {
+        if ($maxPages < 1) throw new \InvalidArgumentException('Maximum page count must be positive.');
         $op = $this->registry->get($operationId);
         if ($op['_method'] !== 'GET') throw new SdkException('Automatic Link-header pagination is only available for GET operations.');
         [$op, $request] = $this->buildRequest($operationId, $arguments);
         $currentUrl = $request->url;
         $result = $this->resultFor($op, $this->transport->send($request));
+        $pageCount = 0;
         while (true) {
+            if (++$pageCount > $maxPages) throw new SdkException("Pagination exceeded the maximum page count ({$maxPages}).");
             yield $result;
             $link = $this->nextLink($result->headers);
-            if ($link === null) return;
+            if ($link === null) {
+                $nextArguments = $strategy?->nextArguments($result, $arguments);
+                if ($nextArguments === null) return;
+                $arguments = $nextArguments;
+                [$op, $request] = $this->buildRequest($operationId, $arguments);
+                $currentUrl = $request->url;
+                $result = $this->resultFor($op, $this->transport->send($request));
+                continue;
+            }
             $url = $this->sameOriginNextUrl($link, $currentUrl);
             $headers = $this->defaultHeaders;
             foreach ($op['_parameters'] as $parameter) {
