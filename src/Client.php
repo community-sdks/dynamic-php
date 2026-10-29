@@ -238,7 +238,7 @@ readonly class Client
                 }
             }, $chunkSize);
             fclose($file);
-            $result = $this->resultFor($op, $response);
+            $result = $this->downloadResult($op, $response);
             if (!rename($temporary, $target)) throw new SdkException('Could not move completed download into place.');
             return $result;
         } catch (\Throwable $e) {
@@ -280,7 +280,7 @@ readonly class Client
                 if (file_put_contents($partial, $response->body, LOCK_EX) !== strlen($response->body)) {
                     throw new SdkException('Could not write complete download response.');
                 }
-                $lastResult = $this->resultFor($op, $response);
+                $lastResult = $this->downloadResult($op, $response);
                 $this->finishResumableDownload($partial, $metadataPath, $target);
                 return $lastResult;
             }
@@ -291,9 +291,9 @@ readonly class Client
                     $this->finishResumableDownload($partial, $metadataPath, $target);
                     return $lastResult;
                 }
-                return $this->resultFor($op, $response);
+                return $this->downloadResult($op, $response);
             }
-            if ($response->status !== 206) return $this->resultFor($op, $response);
+            if ($response->status !== 206) return $this->downloadResult($op, $response);
             $contentRange = $response->header('Content-Range') ?? '';
             if (preg_match('/^bytes (\d+)-(\d+)\/(\d+)$/i', $contentRange, $match) !== 1) {
                 throw new SdkException('Range response has an invalid Content-Range header.');
@@ -314,7 +314,7 @@ readonly class Client
             }
             $offset = $end + 1;
             $this->writeDownloadMetadata($metadataPath, $metadata);
-            $lastResult = $this->resultFor($op, $response);
+            $lastResult = $this->downloadResult($op, $response);
             if ($offset === $total) {
                 $this->finishResumableDownload($partial, $metadataPath, $target);
                 return $lastResult;
@@ -457,6 +457,13 @@ readonly class Client
             throw new ApiException($response->status, $decoded, $response->headers, $response->body);
         }
         return new Result($response->status, $response->headers, $decoded, $response->body);
+    }
+
+    /** @param array<string,mixed> $operation */
+    private function downloadResult(array $operation, Response $response): Result
+    {
+        if ($response->status >= 400) return $this->resultFor($operation, $response);
+        return new Result($response->status, $response->headers, null, $response->body);
     }
 
     /** @param array<string,string> $headers */

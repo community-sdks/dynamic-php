@@ -343,6 +343,19 @@ final class ClientTest extends TestCase
         self::assertSame('photo.bin', $result->data[1]->filename);
         self::assertSame("\x00\xFFraw", $result->data[1]->body);
     }
+    public function testMultipartDecoderHonorsBase64TransferEncoding(): void
+    {
+        $body = "--demo\r\nContent-Disposition: form-data; name=\"file\"; filename=\"payload.bin\"\r\nContent-Type: application/octet-stream\r\nContent-Transfer-Encoding: base64\r\n\r\nAP9yYXc=\r\n--demo--\r\n";
+        $transport = new FakeTransport(new Response(200, ['Content-Type' => 'multipart/mixed; boundary=demo'], $body));
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/parts' => ['get' => ['operationId' => 'getParts', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport);
+
+        $result = $sdk->getParts();
+
+        self::assertSame("\x00\xFFraw", $result->data[0]->body);
+    }
 
     public function testJsonSerializableDtoUsesJsonPropertyNamesForValidationAndEncoding(): void
     {
@@ -563,7 +576,10 @@ final class ClientTest extends TestCase
         ]);
         $sdk = new Client(new Document([
             'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
-            'paths' => ['/file' => ['get' => ['operationId' => 'file', 'responses' => ['206' => ['description' => 'partial']]]]],
+            'paths' => ['/file' => ['get' => ['operationId' => 'file', 'responses' => ['206' => [
+                'description' => 'partial',
+                'content' => ['application/octet-stream' => ['schema' => ['type' => 'string', 'minLength' => 8]]],
+            ]]]]],
         ]), transport: $transport);
         $target = sys_get_temp_dir().DIRECTORY_SEPARATOR.'community-sdk-resume-'.bin2hex(random_bytes(6));
 

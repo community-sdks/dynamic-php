@@ -60,6 +60,16 @@ final class MultipartDecoder
             $filename = rawurldecode($match[1]);
         }
         $contentType = $this->header($headers, 'Content-Type');
+        $transferEncoding = strtolower($this->header($headers, 'Content-Transfer-Encoding') ?? '');
+        if ($transferEncoding === 'base64') {
+            $decodedBody = base64_decode($body, true);
+            if ($decodedBody === false) throw new SdkException('Multipart base64 part is invalid.');
+            $body = $decodedBody;
+        } elseif ($transferEncoding === 'quoted-printable') {
+            $body = quoted_printable_decode($body);
+        } elseif ($transferEncoding !== '' && !in_array($transferEncoding, ['binary', '8bit', '7bit'], true)) {
+            throw new SdkException("Unsupported multipart transfer encoding: {$transferEncoding}");
+        }
         $baseType = strtolower(trim(explode(';', $contentType ?? '', 2)[0]));
         $data = $body;
         if ($baseType === 'application/json' || str_ends_with($baseType, '+json')) {
