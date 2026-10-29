@@ -10,7 +10,7 @@
       "location": "query",
       "parameter": {"name": "filter", "in": "query", "style": "deepObject", "explode": true},
       "value": {"active": true},
-      "expected": ["filter%5Bactive%5D=1"]
+      "expected": ["filter%5Bactive%5D=true"]
     },
     {
       "location": "query",

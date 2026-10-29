@@ -40,8 +40,8 @@ final class ParameterSerializer
         $style = $parameter['style'] ?? 'simple';
         $explode = $parameter['explode'] ?? false;
         $encodedName = rawurlencode($name);
-        if (is_scalar($value)) {
-            $encoded = rawurlencode((string) $value);
+        if (is_scalar($value) || $value === null) {
+            $encoded = rawurlencode($this->scalar($name, $value));
             return match ($style) {
                 'simple' => $encoded,
                 'label' => '.'.$encoded,
@@ -89,8 +89,8 @@ final class ParameterSerializer
         $explode = $parameter['explode'] ?? ($style === 'form');
         $allowReserved = (bool) ($parameter['allowReserved'] ?? false);
         $encodedName = $this->encode($name, $allowReserved);
-        if (is_scalar($value)) {
-            return [$encodedName.'='.$this->encode((string) $value, $allowReserved)];
+        if (is_scalar($value) || $value === null) {
+            return [$encodedName.'='.$this->encode($this->scalar($name, $value), $allowReserved)];
         }
         if (!is_array($value)) {
             throw new ValidationException(["{$name}: unsupported query value"]);
@@ -133,8 +133,8 @@ final class ParameterSerializer
     public function header(array $parameter, mixed $value): string
     {
         $name = $parameter['name'];
-        if (is_scalar($value)) {
-            $serialized = (string) $value;
+        if (is_scalar($value) || $value === null) {
+            $serialized = $this->scalar($name, $value);
         } elseif (is_array($value)) {
             if (array_is_list($value)) {
                 $serialized = implode(',', array_map(fn (mixed $item): string => $this->scalar($name, $item), $value));
@@ -166,8 +166,8 @@ final class ParameterSerializer
         }
         $explode = $parameter['explode'] ?? true;
         $encodedName = rawurlencode($name);
-        if (is_scalar($value)) {
-            return [$encodedName.'='.rawurlencode((string) $value)];
+        if (is_scalar($value) || $value === null) {
+            return [$encodedName.'='.rawurlencode($this->scalar($name, $value))];
         }
         if (!is_array($value)) {
             throw new ValidationException(["{$name}: unsupported cookie value"]);
@@ -191,6 +191,8 @@ final class ParameterSerializer
 
     private function scalar(string $name, mixed $value): string
     {
+        if ($value === null) return '';
+        if (is_bool($value)) return $value ? 'true' : 'false';
         if (!is_scalar($value)) {
             throw new ValidationException(["{$name}: parameter values must be scalar"]);
         }

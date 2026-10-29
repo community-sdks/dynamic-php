@@ -56,7 +56,7 @@ final class ClientTest extends TestCase
 
         $sdk->inspect(tags: ['red', 'blue'], filter: ['active' => true]);
 
-        self::assertSame('https://example.test/items?tags=red&tags=blue&filter%5Bactive%5D=1', $transport->lastRequest->url);
+        self::assertSame('https://example.test/items?tags=red&tags=blue&filter%5Bactive%5D=true', $transport->lastRequest->url);
     }
 
     public function testPathStylesAndCookieParameters(): void
@@ -281,6 +281,19 @@ final class ClientTest extends TestCase
 
         self::assertSame('https://example.test/items?filter=%7B%22active%22%3Atrue%7D', $transport->lastRequest->url);
         self::assertSame('daily report', $transport->lastRequest->headers['X-Label']);
+    }
+
+    public function testBooleanAndNullParametersUseOpenApiScalarRepresentations(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = $this->parameterSdk($transport, [
+            ['name' => 'enabled', 'in' => 'query', 'schema' => ['type' => 'boolean']],
+            ['name' => 'empty', 'in' => 'query', 'schema' => ['type' => ['string', 'null']]],
+        ], '/items');
+
+        $sdk->inspect(enabled: true, empty: null);
+
+        self::assertSame('https://example.test/items?enabled=true&empty=', $transport->lastRequest->url);
     }
 
     public function testOAuthProviderReceivesRequestedScopes(): void
