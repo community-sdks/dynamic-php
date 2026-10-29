@@ -67,7 +67,31 @@ final class IdeStubGeneratorTest extends TestCase
         self::assertStringContainsString('final readonly class UserProfile implements \\JsonSerializable', $dto);
         self::assertStringContainsString('public int $id', $dto);
         self::assertStringContainsString('public ?string $display_name = null', $dto);
-        self::assertStringContainsString("'display-name' => \$this->display_name", $dto);
+        self::assertStringContainsString("\$data['display-name'] = \$this->display_name;", $dto);
+        self::assertStringContainsString("if (\$this->display_name !== null) \$data['display-name'] = \$this->display_name;", $dto);
+    }
+
+    public function testDtoReferencesGenerateModelTypesIncludingRecursiveCollections(): void
+    {
+        $document = new Document([
+            'openapi' => '3.1.0', 'paths' => [],
+            'components' => ['schemas' => [
+                'Child' => ['type' => 'object', 'properties' => ['label' => ['type' => 'string']]],
+                'Parent' => ['type' => 'object', 'required' => ['child'], 'properties' => [
+                    'child' => ['$ref' => '#/components/schemas/Child'],
+                    'children' => ['type' => 'array', 'items' => ['$ref' => '#/components/schemas/Child']],
+                ]],
+                'Node' => ['type' => 'object', 'properties' => [
+                    'children' => ['type' => 'array', 'items' => ['$ref' => '#/components/schemas/Node']],
+                ]],
+            ]],
+        ]);
+
+        $dto = (new DtoGenerator($document))->generate();
+
+        self::assertStringContainsString('public Child $child', $dto);
+        self::assertStringContainsString('@param list<Child>|null $children', $dto);
+        self::assertStringContainsString('@param list<Node>|null $children', $dto);
     }
 
     public function testGeneratesMixedFallbackForRecursiveModelsAndInvalidOperationNames(): void

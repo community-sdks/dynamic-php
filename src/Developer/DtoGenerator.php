@@ -42,13 +42,15 @@ final readonly class DtoGenerator
                 $usedNames[$phpName] = true;
                 $isRequired = is_array($required) && in_array($jsonName, $required, true);
                 $types = $this->types($property);
-                if (!$isRequired && !in_array('null', $types, true)) $types[] = 'null';
+                $schemaNullable = in_array('null', $types, true);
+                if (!$isRequired && !$schemaNullable) $types[] = 'null';
                 $entry = [
                     'jsonName' => (string) $jsonName,
                     'phpName' => $phpName,
                     'nativeType' => $this->nativeType($types),
                     'docType' => $this->docType($types, $property),
                     'required' => $isRequired,
+                    'nullable' => $schemaNullable,
                 ];
                 if ($isRequired) $requiredProperties[] = $entry;
                 else $optionalProperties[] = $entry;
@@ -71,9 +73,16 @@ final readonly class DtoGenerator
             $lines[] = '';
             $lines[] = '    public function jsonSerialize(): array';
             $lines[] = '    {';
-            $lines[] = '        return [';
-            foreach ($all as $property) $lines[] = '            '.var_export($property['jsonName'], true).' => $this->'.$property['phpName'].',';
-            $lines[] = '        ];';
+            $lines[] = '        $data = [];';
+            foreach ($all as $property) {
+                $assignment = '$data['.var_export($property['jsonName'], true).'] = $this->'.$property['phpName'].';';
+                if (!$property['required'] && !$property['nullable']) {
+                    $lines[] = '        if ($this->'.$property['phpName'].' !== null) '.$assignment;
+                } else {
+                    $lines[] = '        '.$assignment;
+                }
+            }
+            $lines[] = '        return $data;';
             $lines[] = '    }';
             $lines[] = '}';
             $lines[] = '';
@@ -104,7 +113,8 @@ final readonly class DtoGenerator
         if (isset($schema['$ref']) && is_string($schema['$ref'])) {
             if (!preg_match('~^#/components/schemas/[^/]+$~', $schema['$ref'])) return ['mixed'];
             $parts = explode('/', $schema['$ref']);
-            return [self::classNameStatic(rawurldecode(end($parts)))];
+            $schemaName = str_replace(['~1', '~0'], ['/', '~'], rawurldecode(end($parts)));
+            return [self::classNameStatic($schemaName)];
         }
         if (isset($schema['oneOf']) || isset($schema['anyOf'])) {
             $alternatives = $schema['oneOf'] ?? $schema['anyOf'];
@@ -127,7 +137,12 @@ final readonly class DtoGenerator
             'object', 'array' => 'array', 'null' => 'null', default => 'mixed',
         }, $types);
         $flattened = [];
-        foreach ($mapped as $type) array_push($flattened, ...explode('|', $type));
+        foreach ($mapped as $type) {
+            if ($type === 'mixed' && count($types) === 1 && preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/D', $types[0]) === 1) {
+                $type = $types[0];
+            }
+            array_push($flattened, ...explode('|', $type));
+        }
         $flattened = array_values(array_unique($flattened));
         if (in_array('mixed', $flattened, true)) return 'mixed';
         if (count($flattened) === 2 && in_array('null', $flattened, true)) {
@@ -144,7 +159,7 @@ final readonly class DtoGenerator
             $items = is_array($schema['items'] ?? null) ? $this->types($schema['items']) : ['mixed'];
             $itemTypes = array_map(static fn (string $type): string => match ($type) {
                 'integer' => 'int', 'number' => 'int|float', 'boolean' => 'bool', 'string' => 'string',
-                'object' => 'array<string, mixed>', 'array' => 'list<mixed>', 'null' => 'null', default => $type,
+                'object' => 'array<string, mixed>', 'array' => 'list<mixed>', 'null' => 'null', 'mixed' => 'mixed', default => $type,
             }, $items);
             $itemType = implode('|', array_unique($itemTypes));
             return 'list<'.$itemType.'>'.(in_array('null', $types, true) ? '|null' : '');
