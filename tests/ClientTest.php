@@ -353,6 +353,46 @@ final class ClientTest extends TestCase
         self::assertSame('{"display-name":"Ada"}', $transport->lastRequest->body);
     }
 
+    public function testServerVariableDefaultsOverridesAndOperationServerPrecedence(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0',
+            'servers' => [['url' => 'https://{region}.example.test/{version}', 'variables' => [
+                'region' => ['default' => 'api', 'enum' => ['api', 'beta']],
+                'version' => ['default' => 'v1'],
+            ]]],
+            'paths' => [
+                '/global' => ['get' => ['operationId' => 'global', 'responses' => ['200' => ['description' => 'ok']]]],
+                '/operation' => ['get' => [
+                    'operationId' => 'operation',
+                    'servers' => [['url' => 'https://edge.example.test/{version}', 'variables' => ['version' => ['default' => 'stable']]]],
+                    'responses' => ['200' => ['description' => 'ok']],
+                ]],
+            ],
+        ]), transport: $transport, allowedHosts: ['beta.example.test', 'edge.example.test'], serverVariables: ['region' => 'beta', 'version' => 'v2']);
+
+        $sdk->global();
+        self::assertSame('https://beta.example.test/v2/global', $transport->lastRequest->url);
+        $sdk->operation();
+        self::assertSame('https://edge.example.test/v2/operation', $transport->lastRequest->url);
+    }
+
+    public function testOperationServerMustPassHostAllowlist(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://api.example.test']],
+            'paths' => ['/private' => ['get' => [
+                'operationId' => 'private', 'servers' => [['url' => 'https://untrusted.example.test']],
+                'responses' => ['200' => ['description' => 'ok']],
+            ]]],
+        ]), transport: $transport, allowedHosts: ['api.example.test']);
+
+        $this->expectException(SdkException::class);
+        $sdk->private();
+    }
+
     public function testPaginationRejectsCrossOriginNextLink(): void
     {
         $transport = new FakeTransport(new Response(200, ['Link' => '<https://other.example.test/items?page=2>; rel="next"'], '[]'));
@@ -471,7 +511,7 @@ final class ClientTest extends TestCase
     {
         $inner = new FakeTransport(new Response(204));
         $recorded = [];
-        $middleware = new MetricsMiddleware(static function (Request $request, ?Response $response, float $duration, ?Throwable $error) use (&$recorded): void {
+        $middleware = new MetricsMiddleware(static function (Request $request, ?Response $response, float $duration, ?\Throwable $error) use (&$recorded): void {
             $recorded = [$request->method, $response?->status, $duration, $error];
         });
         $transport = new MiddlewareTransport($inner, [$middleware]);

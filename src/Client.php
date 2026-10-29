@@ -22,6 +22,7 @@ readonly class Client
     private Transport $transport;
     private ?StreamingTransport $streamingTransport;
     private string $baseUrl;
+    private ?string $baseUrlOverride;
 
     /** @param array<string,string> $defaultHeaders */
     public function __construct(
@@ -39,6 +40,8 @@ readonly class Client
         /** @var list<string> exact lowercased or case-insensitive allowed hostnames */
         private array $allowedHosts = [],
         private ?OAuthTokenProvider $oauthTokenProvider = null,
+        /** @var array<string,string> server variable overrides */
+        private array $serverVariables = [],
     ) {
         $this->registry = new Registry($document);
         $this->validator = new Validator($document);
@@ -51,28 +54,75 @@ readonly class Client
         $this->streamingTransport = $configuredTransport instanceof StreamingTransport ? $configuredTransport : null;
         if ($maxRetries > 0) $configuredTransport = new RetryingTransport($configuredTransport, $maxRetries);
         $this->transport = $configuredTransport;
-        $server = $baseUrl ?? ($document->data['servers'][0]['url'] ?? null);
-        if (!is_string($server) || !preg_match('~^https?://~i', $server)) {
-            throw new SdkException('Provide an absolute HTTP(S) base URL.');
+        $this->baseUrlOverride = $baseUrl === null ? null : $this->validateBaseUrl($baseUrl);
+        $server = $this->baseUrlOverride;
+        if ($server === null) {
+            $serverList = $document->data['servers'] ?? [];
+            $serverDefinition = is_array($serverList[0] ?? null) ? $serverList[0] : null;
+            if ($serverDefinition === null) {
+                foreach ($this->registry->all() as $operation) {
+                    if (is_array($operation['_servers'][0] ?? null)) {
+                        $serverDefinition = $operation['_servers'][0];
+                        break;
+                    }
+                }
+            }
+            if ($serverDefinition !== null) $server = $this->serverUrl($serverDefinition);
         }
-        $serverParts = parse_url($server);
-        if (!is_array($serverParts) || !isset($serverParts['host']) || $serverParts['host'] === ''
-            || isset($serverParts['user']) || isset($serverParts['pass']) || isset($serverParts['query']) || isset($serverParts['fragment'])
-            || preg_match('/[\x00-\x20\\\\]/', $server)) {
-            throw new SdkException('Base URL must not contain credentials, query, fragment, whitespace, or invalid characters.');
-        }
-        if ($allowedHosts !== [] && !in_array(strtolower($serverParts['host']), array_map('strtolower', $allowedHosts), true)) {
-            throw new SdkException('Base URL host is not in the configured allowlist.');
-        }
+        if ($server === null) throw new SdkException('Provide an absolute HTTP(S) base URL.');
         if ($maxRetries < 0) throw new \InvalidArgumentException('maxRetries must be non-negative.');
-        $this->baseUrl = rtrim($server, '/');
+        $this->baseUrl = rtrim($this->validateBaseUrl($server), '/');
     }
 
-    /** @param array<string,string> $credentials */
-    /** @param array<string,string> $credentials @param list<HttpMiddleware> $middleware @param list<string> $allowedHosts */
-    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0, array $allowedHosts = [], ?OAuthTokenProvider $oauthTokenProvider = null): self
+    /** @param array<string,string> $credentials @param list<HttpMiddleware> $middleware @param list<string> $allowedHosts @param array<string,string> $serverVariables */
+    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0, array $allowedHosts = [], ?OAuthTokenProvider $oauthTokenProvider = null, array $serverVariables = []): self
     {
-        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries, allowedHosts: $allowedHosts, oauthTokenProvider: $oauthTokenProvider);
+        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries, allowedHosts: $allowedHosts, oauthTokenProvider: $oauthTokenProvider, serverVariables: $serverVariables);
+    }
+
+    private function validateBaseUrl(string $server): string
+    {
+        if (!preg_match('~^https?://~i', $server)) throw new SdkException('Provide an absolute HTTP(S) base URL.');
+        $parts = parse_url($server);
+        if (!is_array($parts) || !isset($parts['host']) || $parts['host'] === '' || isset($parts['user']) || isset($parts['pass'])
+            || isset($parts['query']) || isset($parts['fragment']) || preg_match('/[\x00-\x20\\\\]/', $server)) {
+            throw new SdkException('Base URL must not contain credentials, query, fragment, whitespace, or invalid characters.');
+        }
+        if ($this->allowedHosts !== [] && !in_array(strtolower($parts['host']), array_map('strtolower', $this->allowedHosts), true)) {
+            throw new SdkException('Base URL host is not in the configured allowlist.');
+        }
+        return rtrim($server, '/');
+    }
+
+    /** @param array<string,mixed> $server */
+    private function serverUrl(array $server): string
+    {
+        $url = $server['url'] ?? null;
+        if (!is_string($url)) throw new SdkException('OpenAPI server URL must be a string.');
+        $variables = $server['variables'] ?? [];
+        if (!is_array($variables)) throw new SdkException('OpenAPI server variables must be an object.');
+        if (preg_match_all('/\{([A-Za-z0-9._-]+)\}/', $url, $matches) > 0) {
+            foreach ($matches[1] as $name) {
+                $definition = $variables[$name] ?? null;
+                if (!is_array($definition)) throw new SdkException("No definition for server variable {$name}.");
+                $value = $this->serverVariables[$name] ?? $definition['default'] ?? null;
+                if (!is_string($value)) throw new SdkException("No string value for server variable {$name}.");
+                if (isset($definition['enum']) && is_array($definition['enum']) && !in_array($value, $definition['enum'], true)) {
+                    throw new SdkException("Invalid value for server variable {$name}.");
+                }
+                $url = str_replace('{'.$name.'}', rawurlencode($value), $url);
+            }
+        }
+        if (str_contains($url, '{') || str_contains($url, '}')) throw new SdkException('Unresolved OpenAPI server variable.');
+        return $this->validateBaseUrl($url);
+    }
+
+    /** @param array<string,mixed> $operation */
+    private function baseUrlForOperation(array $operation): string
+    {
+        if ($this->baseUrlOverride !== null) return $this->baseUrlOverride;
+        $servers = $operation['_servers'] ?? [];
+        return is_array($servers) && is_array($servers[0] ?? null) ? $this->serverUrl($servers[0]) : $this->baseUrl;
     }
 
     public function operations(): Registry { return $this->registry; }
@@ -157,7 +207,7 @@ readonly class Client
         if ($unknown !== []) throw new ValidationException(['Unknown arguments: '.implode(', ', $unknown)]);
         $this->securityResolver->apply($op, $this->token, $this->credentials, $headers, $query, $cookies, $this->oauthTokenProvider);
         $this->mergeCookies($headers, $cookies);
-        $url = $this->baseUrl.'/'.ltrim($path, '/');
+        $url = $this->baseUrlForOperation($op).'/'.ltrim($path, '/');
         if ($query !== []) $url .= '?'.implode('&', $query);
         return [$op, new Request($op['_method'], $url, $headers, $body)];
     }
@@ -423,14 +473,14 @@ readonly class Client
 
     private function sameOriginNextUrl(string $link, string $currentUrl): string
     {
-        $base = parse_url($this->baseUrl);
+        $current = parse_url($currentUrl);
+        if (!is_array($current)) throw new SdkException('Invalid current pagination URL.');
+        $base = $current;
         if (preg_match('/[\x00-\x20\\\\]/', $link)) throw new SdkException('Invalid pagination next link.');
         $parts = parse_url($link);
         if (!is_array($parts)) throw new SdkException('Invalid pagination next link.');
         if (!isset($parts['scheme'])) {
             if (str_starts_with($link, '//')) throw new SdkException('Pagination next links must be same-origin.');
-            $current = parse_url($currentUrl);
-            if (!is_array($current)) throw new SdkException('Invalid current pagination URL.');
             if (str_starts_with($link, '/')) {
                 $link = $this->origin($base).$link;
             } elseif (str_starts_with($link, '?')) {
@@ -450,7 +500,7 @@ readonly class Client
             }
             $parts = parse_url($link);
         }
-        if (isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment']) || !is_array($base) || !is_array($parts)) {
+        if (isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment']) || !is_array($parts)) {
             throw new SdkException('Invalid pagination next link.');
         }
         $basePort = $base['port'] ?? (strtolower($base['scheme'] ?? '') === 'https' ? 443 : 80);

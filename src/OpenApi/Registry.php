@@ -35,6 +35,7 @@ final readonly class Registry
                 $operations[$id]['_method'] = strtoupper($verb);
                 $operations[$id]['_path'] = $path;
                 $operations[$id]['_parameters'] = array_values($parameters);
+                $operations[$id]['_servers'] = $operation['servers'] ?? $pathItem['servers'] ?? $document->data['servers'] ?? [];
             }
         }
         $this->operations = $operations;
