@@ -73,6 +73,7 @@ use CommunitySDKs\OpenApi\Document;
 $client = new Client(
     document: Document::fromFile('specs/jsonplaceholder.openapi.json'),
     baseUrl: 'https://jsonplaceholder.typicode.com',
+    allowedHosts: ['jsonplaceholder.typicode.com'],
     token: null, // Optional Bearer token. Only use with trusted API hosts.
     defaultHeaders: ['Accept' => 'application/json'],
     validateResponses: true,
