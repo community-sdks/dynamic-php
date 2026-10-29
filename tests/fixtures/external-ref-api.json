@@ -1,0 +1,22 @@
+{
+  "openapi": "3.1.0",
+  "servers": [{"url": "https://example.test"}],
+  "paths": {
+    "/envelope": {
+      "get": {
+        "operationId": "getEnvelope",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "schemas/recursive.json#/components/schemas/Envelope"}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {"schemas": {}}
+}

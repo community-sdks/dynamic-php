@@ -94,4 +94,23 @@ final class ValidatorTest extends TestCase
         $this->expectException(SdkException::class);
         $this->validator()->assert(['value' => 1], ['$ref' => 'https://schemas.example.test/value.json']);
     }
+
+    public function testTrustedSiblingFileReferencesAndRecursivePointers(): void
+    {
+        $document = Document::fromFile(__DIR__.'/fixtures/external-ref-api.json');
+        $validator = new Validator($document);
+        $schema = ['$ref' => 'schemas/recursive.json#/components/schemas/Envelope'];
+
+        $validator->assert(['node' => ['value' => 'root', 'children' => [['value' => 'child']]]], $schema);
+        $this->expectException(ValidationException::class);
+        $validator->assert(['node' => ['value' => 42]], $schema);
+    }
+
+    public function testLocalReferenceCannotEscapeSpecificationDirectory(): void
+    {
+        $validator = new Validator(Document::fromFile(__DIR__.'/fixtures/external-ref-api.json'));
+
+        $this->expectException(SdkException::class);
+        $validator->assert(['name' => 'x'], ['$ref' => '../../composer.json']);
+    }
 }

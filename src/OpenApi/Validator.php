@@ -21,10 +21,15 @@ final readonly class Validator
     /** @param array<string,mixed> $schema */
     public function assert(mixed $value, array $schema, string $location = '$'): void
     {
-        $this->assertLocalReferences($schema);
-        $normalizedSchema = $this->normalizeSchema($schema);
+        $sourcePath = $this->document->sourcePath();
+        $this->assertLocalReferences($schema, sourcePath: $sourcePath);
+        $normalizedSchema = $this->normalizeSchema($schema, sourcePath: $sourcePath);
         $schema = $this->toOpisValue($normalizedSchema, 'schema');
-        $referenceRoot = $this->toOpisValue($this->normalizeSchema($this->document->data, false), 'document');
+        $referenceRoot = ['root' => $this->normalizeSchema($this->document->data, false, $sourcePath)];
+        foreach ($this->document->externalDocuments() as $key => $external) {
+            $referenceRoot['external'][$key] = $this->normalizeSchema($external['data'], false, $external['path']);
+        }
+        $referenceRoot = $this->toOpisValue($referenceRoot, 'document');
         $schemaId = 'https://community-sdks.invalid/schema/'.hash('sha256', serialize($schema));
         $root = (object) [
             '$schema' => 'https://json-schema.org/draft/2020-12/schema',
@@ -46,24 +51,27 @@ final readonly class Validator
     }
 
     /** @param array<string,mixed> $schema @return array<string,mixed> */
-    private function normalizeSchema(array $schema, bool $rejectExternal = true): array
+    private function normalizeSchema(array $schema, bool $rejectExternal = true, ?string $sourcePath = null): array
     {
         $result = [];
         foreach ($schema as $key => $value) {
             if ($key === '$ref') {
-                if (!is_string($value) || ($value !== '#' && !str_starts_with($value, '#/'))) {
-                    if ($rejectExternal) throw new SdkException('Remote and cross-file $ref are not supported: '.(string) $value);
+                if (!is_string($value)) throw new SdkException('Invalid $ref value.');
+                try {
+                    $reference = $this->document->resolveReference($value, $sourcePath);
+                } catch (SdkException $e) {
+                    if ($rejectExternal) throw $e;
                     $result[$key] = $value;
                     continue;
                 }
-                $result[$key] = $value === '#' ? '#/$defs' : '#/$defs'.substr($value, 1);
+                $result[$key] = '#/$defs/'.$reference['key'].$reference['pointer'];
             } elseif (in_array($key, ['nullable', '$id', '$schema', '$anchor', '$dynamicAnchor'], true)) {
                 continue;
             } elseif (is_array($value)) {
                 if (in_array($key, ['allOf', 'anyOf', 'oneOf', 'prefixItems', 'examples', 'enum', 'required'], true)) {
-                    $result[$key] = array_map(fn (mixed $item): mixed => is_array($item) ? $this->normalizeSchema($item, $rejectExternal) : $item, $value);
+                    $result[$key] = array_map(fn (mixed $item): mixed => is_array($item) ? $this->normalizeSchema($item, $rejectExternal, $sourcePath) : $item, $value);
                 } else {
-                    $result[$key] = $this->normalizeSchema($value, $rejectExternal);
+                    $result[$key] = $this->normalizeSchema($value, $rejectExternal, $sourcePath);
                 }
             } else {
                 $result[$key] = $value;
@@ -80,9 +88,12 @@ final readonly class Validator
                     $tag = null;
                     foreach (is_array($mapping) ? $mapping : [] as $mappedTag => $mappedReference) {
                         if (!is_string($mappedReference)) continue;
-                        $normalizedReference = str_starts_with($mappedReference, '#/')
-                            ? '#/$defs'.substr($mappedReference, 1)
-                            : $mappedReference;
+                        try {
+                            $mappedInfo = $this->document->resolveReference($mappedReference, $sourcePath);
+                            $normalizedReference = '#/$defs/'.$mappedInfo['key'].$mappedInfo['pointer'];
+                        } catch (SdkException) {
+                            $normalizedReference = $mappedReference;
+                        }
                         if ($normalizedReference === $reference) $tag = (string) $mappedTag;
                     }
                     if ($tag === null) {
@@ -106,27 +117,18 @@ final readonly class Validator
     }
 
     /** @param array<string,mixed> $schema @param array<string,true> $visited */
-    private function assertLocalReferences(array $schema, array $visited = [], int $depth = 0): void
+    private function assertLocalReferences(array $schema, array $visited = [], int $depth = 0, ?string $sourcePath = null): void
     {
         if ($depth > 64) throw new SdkException('Schema reference depth exceeded.');
         foreach ($schema as $key => $value) {
             if ($key === '$ref') {
-                if (!is_string($value) || !str_starts_with($value, '#/')) {
-                    throw new SdkException('Remote and cross-file $ref are not supported: '.(string) $value);
-                }
-                if (isset($visited[$value])) continue;
-                $target = $this->document->data;
-                foreach (explode('/', substr($value, 2)) as $part) {
-                    $part = str_replace(['~1', '~0'], ['/', '~'], $part);
-                    if (!is_array($target) || !array_key_exists($part, $target)) {
-                        throw new SdkException("Unresolved reference {$value}");
-                    }
-                    $target = $target[$part];
-                }
-                if (!is_array($target)) throw new SdkException("Reference {$value} is not a schema object.");
-                $this->assertLocalReferences($target, $visited + [$value => true], $depth + 1);
+                if (!is_string($value)) throw new SdkException('Invalid $ref value.');
+                $reference = $this->document->resolveReference($value, $sourcePath);
+                $identity = $reference['key'].$reference['pointer'];
+                if (isset($visited[$identity])) continue;
+                $this->assertLocalReferences($reference['value'], $visited + [$identity => true], $depth + 1, $reference['sourcePath']);
             } elseif (is_array($value)) {
-                $this->assertLocalReferences($value, $visited, $depth + 1);
+                $this->assertLocalReferences($value, $visited, $depth + 1, $sourcePath);
             }
         }
     }

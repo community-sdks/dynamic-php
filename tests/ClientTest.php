@@ -471,6 +471,15 @@ final class ClientTest extends TestCase
         self::assertSame('{"display-name":"Ada"}', $transport->lastRequest->body);
     }
 
+    public function testExternalSchemaReferenceValidatesClientResponse(): void
+    {
+        $transport = new FakeTransport(new Response(200, ['Content-Type' => 'application/json'], '{"node":{"value":42}}'));
+        $sdk = Client::fromFile(__DIR__.'/fixtures/external-ref-api.json', transport: $transport);
+
+        $this->expectException(ValidationException::class);
+        $sdk->getEnvelope();
+    }
+
     public function testServerVariableDefaultsOverridesAndOperationServerPrecedence(): void
     {
         $transport = new FakeTransport();

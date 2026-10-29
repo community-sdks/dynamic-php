@@ -1,0 +1,19 @@
+{
+  "components": {
+    "schemas": {
+      "Envelope": {
+        "type": "object",
+        "required": ["node"],
+        "properties": {"node": {"$ref": "#/components/schemas/Node"}}
+      },
+      "Node": {
+        "type": "object",
+        "required": ["value"],
+        "properties": {
+          "value": {"type": "string"},
+          "children": {"type": "array", "items": {"$ref": "#/components/schemas/Node"}}
+        }
+      }
+    }
+  }
+}
