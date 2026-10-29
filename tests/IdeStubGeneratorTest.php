@@ -94,6 +94,25 @@ final class IdeStubGeneratorTest extends TestCase
         self::assertStringContainsString('@param list<Node>|null $children', $dto);
     }
 
+    public function testDtoGeneratorPreservesOneOfModelUnions(): void
+    {
+        $document = new Document([
+            'openapi' => '3.1.0', 'paths' => [],
+            'components' => ['schemas' => [
+                'Cat' => ['type' => 'object', 'properties' => ['meows' => ['type' => 'boolean']]],
+                'Dog' => ['type' => 'object', 'properties' => ['barks' => ['type' => 'boolean']]],
+                'Owner' => ['type' => 'object', 'properties' => ['pet' => ['oneOf' => [
+                    ['$ref' => '#/components/schemas/Cat'], ['$ref' => '#/components/schemas/Dog'],
+                ]]]],
+            ]],
+        ]);
+
+        $dto = (new DtoGenerator($document))->generate();
+
+        self::assertStringContainsString('public Cat|Dog|null $pet = null', $dto);
+        self::assertStringContainsString('@param Cat|Dog|null $pet', $dto);
+    }
+
     public function testGeneratesMixedFallbackForRecursiveModelsAndInvalidOperationNames(): void
     {
         $document = new Document([

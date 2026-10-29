@@ -134,15 +134,11 @@ final readonly class DtoGenerator
     {
         $mapped = array_map(static fn (string $type): string => match ($type) {
             'integer' => 'int', 'number' => 'int|float', 'boolean' => 'bool', 'string' => 'string',
-            'object', 'array' => 'array', 'null' => 'null', default => 'mixed',
+            'object', 'array' => 'array', 'null' => 'null',
+            default => preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/D', $type) === 1 ? $type : 'mixed',
         }, $types);
         $flattened = [];
-        foreach ($mapped as $type) {
-            if ($type === 'mixed' && count($types) === 1 && preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/D', $types[0]) === 1) {
-                $type = $types[0];
-            }
-            array_push($flattened, ...explode('|', $type));
-        }
+        foreach ($mapped as $type) array_push($flattened, ...explode('|', $type));
         $flattened = array_values(array_unique($flattened));
         if (in_array('mixed', $flattened, true)) return 'mixed';
         if (count($flattened) === 2 && in_array('null', $flattened, true)) {
@@ -159,7 +155,8 @@ final readonly class DtoGenerator
             $items = is_array($schema['items'] ?? null) ? $this->types($schema['items']) : ['mixed'];
             $itemTypes = array_map(static fn (string $type): string => match ($type) {
                 'integer' => 'int', 'number' => 'int|float', 'boolean' => 'bool', 'string' => 'string',
-                'object' => 'array<string, mixed>', 'array' => 'list<mixed>', 'null' => 'null', 'mixed' => 'mixed', default => $type,
+                'object' => 'array<string, mixed>', 'array' => 'list<mixed>', 'null' => 'null',
+                'mixed' => 'mixed', default => preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/D', $type) === 1 ? $type : 'mixed',
             }, $items);
             $itemType = implode('|', array_unique($itemTypes));
             return 'list<'.$itemType.'>'.(in_array('null', $types, true) ? '|null' : '');
