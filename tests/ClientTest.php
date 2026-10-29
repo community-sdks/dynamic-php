@@ -297,6 +297,29 @@ final class ClientTest extends TestCase
         self::assertSame('https://example.test/items?enabled=true&empty=', $transport->lastRequest->url);
     }
 
+    public function testAllowEmptyValueAndReservedQueryEncoding(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = $this->parameterSdk($transport, [
+            ['name' => 'q', 'in' => 'query', 'allowEmptyValue' => true, 'schema' => ['type' => 'string']],
+            ['name' => 'filter', 'in' => 'query', 'allowReserved' => true, 'schema' => ['type' => 'string']],
+        ], '/items');
+
+        $sdk->inspect(q: '', filter: 'a/b?c#d');
+
+        self::assertSame('https://example.test/items?q=&filter=a/b?c%23d', $transport->lastRequest->url);
+    }
+
+    public function testEmptyQueryValueIsRejectedByDefault(): void
+    {
+        $sdk = $this->parameterSdk(new FakeTransport(), [
+            ['name' => 'q', 'in' => 'query', 'schema' => ['type' => 'string']],
+        ], '/items');
+
+        $this->expectException(ValidationException::class);
+        $sdk->inspect(q: '');
+    }
+
     public function testOAuthProviderReceivesRequestedScopes(): void
     {
         $transport = new FakeTransport();

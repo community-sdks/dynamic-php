@@ -88,7 +88,7 @@ final class ParameterSerializer
         $style = $parameter['style'] ?? 'form';
         $explode = $parameter['explode'] ?? ($style === 'form');
         $allowReserved = (bool) ($parameter['allowReserved'] ?? false);
-        $encodedName = $this->encode($name, $allowReserved);
+        $encodedName = rawurlencode($name);
         if (is_scalar($value) || $value === null) {
             return [$encodedName.'='.$this->encode($this->scalar($name, $value), $allowReserved)];
         }
@@ -114,7 +114,7 @@ final class ParameterSerializer
             }
             $encodedName = $this->encode($name, $allowReserved);
             return array_map(fn (string|int $key, mixed $item): string =>
-                $encodedName.'%5B'.$this->encode((string) $key, $allowReserved).'%5D='.$this->encodeValue($name, $item, $allowReserved),
+                $encodedName.'%5B'.rawurlencode((string) $key).'%5D='.$this->encodeValue($name, $item, $allowReserved),
                 array_keys($value),
                 array_values($value),
             );
@@ -204,7 +204,7 @@ final class ParameterSerializer
     {
         $pairs = [];
         foreach ($value as $key => $item) {
-            $pairs[] = [$this->encode((string) $key, $allowReserved), $this->encodeValue($name, $item, $allowReserved)];
+            $pairs[] = [rawurlencode((string) $key), $this->encodeValue($name, $item, $allowReserved)];
         }
         return $pairs;
     }
@@ -213,7 +213,7 @@ final class ParameterSerializer
     {
         $encoded = rawurlencode($value);
         if ($allowReserved) {
-            $encoded = str_replace(['%3A', '%2F', '%3F', '%23', '%5B', '%5D', '%40', '%21', '%24', '%26', '%27', '%28', '%29', '%2A', '%2B', '%2C', '%3B', '%3D'], [':', '/', '?', '#', '[', ']', '@', '!', '$', '&', "'", '(', ')', '*', '+', ',', ';', '='], $encoded);
+            $encoded = str_replace(['%3A', '%2F', '%3F', '%5B', '%5D', '%40', '%21', '%24', '%26', '%27', '%28', '%29', '%2A', '%2B', '%2C', '%3B', '%3D'], [':', '/', '?', '[', ']', '@', '!', '$', '&', "'", '(', ')', '*', '+', ',', ';', '='], $encoded);
         }
         return $encoded;
     }

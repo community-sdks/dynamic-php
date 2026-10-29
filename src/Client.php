@@ -160,6 +160,9 @@ readonly class Client
             }
             $used[$name] = true;
             $value = $arguments[$name];
+            if ($place === 'query' && $value === '' && !($parameter['allowEmptyValue'] ?? false)) {
+                throw new ValidationException(["{$name}: empty query value requires allowEmptyValue=true"]);
+            }
             if (isset($parameter['content'])) {
                 $content = $parameter['content'];
                 $media = is_array($content) ? reset($content) : null;
