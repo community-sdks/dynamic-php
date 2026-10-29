@@ -344,6 +344,21 @@ final class ClientTest extends TestCase
         self::assertSame('text/event-stream', $transport->requests[0]->headers['Accept']);
     }
 
+    public function testSseParserDispatchesFinalEventWithoutBlankTerminator(): void
+    {
+        $transport = new FakeStreamingTransport(['data: final event'], new Response(200, ['Content-Type' => 'text/event-stream']));
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/events' => ['get' => ['operationId' => 'events', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport);
+        $events = [];
+
+        $sdk->streamEvents('events', static function (array $event) use (&$events): void { $events[] = $event; });
+
+        self::assertCount(1, $events);
+        self::assertSame('final event', $events[0]['data']);
+    }
+
     public function testConfiguredMiddlewareRunsForSseRequests(): void
     {
         $inner = new FakeStreamingTransport(['data: event\n\n'], new Response(200, ['Content-Type' => 'text/event-stream']));

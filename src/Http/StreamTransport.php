@@ -28,7 +28,13 @@ final readonly class StreamTransport implements StreamingTransport
         if ($body === false) {
             throw new TransportException('HTTP connection failed (timeout, DNS or TLS error).');
         }
-        $headers = $http_response_header;
+        $localVariables = get_defined_vars();
+        if (function_exists('http_get_last_response_headers')) {
+            $headers = http_get_last_response_headers();
+        } else {
+            $headers = $localVariables['http_response_header'];
+        }
+        if (!is_array($headers)) $headers = [];
         $status = preg_match('~^HTTP/\S+\s+(\d+)~', $headers[0] ?? '', $m) ? (int) $m[1] : 0;
         $parsed = [];
         foreach (array_slice($headers, 1) as $header) {
@@ -55,7 +61,13 @@ final readonly class StreamTransport implements StreamingTransport
         ]]);
         $stream = @fopen($request->url, 'rb', false, $context);
         if ($stream === false) throw new TransportException('HTTP connection failed (timeout, DNS or TLS error).');
-        $headers = $http_response_header;
+        $localVariables = get_defined_vars();
+        if (function_exists('http_get_last_response_headers')) {
+            $headers = http_get_last_response_headers();
+        } else {
+            $headers = $localVariables['http_response_header'];
+        }
+        if (!is_array($headers)) $headers = [];
         $status = preg_match('~^HTTP/\S+\s+(\d+)~', $headers[0] ?? '', $match) ? (int) $match[1] : 0;
         $parsed = [];
         foreach (array_slice($headers, 1) as $header) {

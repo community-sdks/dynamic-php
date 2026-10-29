@@ -229,6 +229,7 @@ readonly class Client
             }
             $dispatch();
         }
+        $dispatch();
         if ($response->status < 400 && $response->contentType() !== 'text/event-stream') {
             throw new SdkException('Expected a text/event-stream response.');
         }
