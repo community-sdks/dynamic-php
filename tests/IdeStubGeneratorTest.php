@@ -32,6 +32,23 @@ final class IdeStubGeneratorTest extends TestCase
 
         self::assertStringContainsString('findPets(?string $filter, ?int $limit = null)', $stub);
         self::assertStringContainsString("list<array{id: int, 'display-name'?: string}>", $stub);
+        self::assertStringNotContainsString('): \\CommunitySDKs\\Http\\Result<', $stub);
+    }
+
+    public function testRequiredBodyPrecedesOptionalParameters(): void
+    {
+        $document = new Document([
+            'openapi' => '3.1.0', 'paths' => ['/items' => ['post' => [
+                'operationId' => 'createItem',
+                'parameters' => [['name' => 'locale', 'in' => 'query', 'schema' => ['type' => 'string']]],
+                'requestBody' => ['required' => true, 'content' => ['application/json' => ['schema' => ['type' => 'object']]]],
+                'responses' => ['201' => ['description' => 'created']],
+            ]]],
+        ]);
+
+        $stub = (new IdeStubGenerator($document))->generate();
+
+        self::assertStringContainsString('createItem(array<string, mixed> $body, ?string $locale = null)', $stub);
     }
 
     public function testGeneratesMixedFallbackForRecursiveModelsAndInvalidOperationNames(): void

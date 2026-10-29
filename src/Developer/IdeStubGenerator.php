@@ -31,26 +31,26 @@ final readonly class IdeStubGenerator
         ];
         foreach ($registry->all() as $id => $operation) {
             if (!$this->isIdentifier($id) || in_array(strtolower($id), self::PHP_KEYWORDS, true)) continue;
-            $parameters = [];
-            $invalidParameter = false;
+            if (in_array($id, ['call', 'operations', 'fromFile', 'paginate', 'download', 'streamEvents'], true)) continue;
+            $requiredParameters = [];
+            $optionalParameters = [];
+            $parameterNames = [];
             $operationParameters = $operation['_parameters'];
             usort($operationParameters, static fn (array $left, array $right): int => (int) ($right['required'] ?? false) <=> (int) ($left['required'] ?? false));
             foreach ($operationParameters as $parameter) {
                 $name = $parameter['name'];
-                if (!is_string($name) || !$this->isIdentifier($name) || in_array(strtolower($name), self::PHP_KEYWORDS, true)) {
-                    $invalidParameter = true;
-                    break;
-                }
+                if (!is_string($name) || !$this->isIdentifier($name) || in_array(strtolower($name), self::PHP_KEYWORDS, true) || isset($parameterNames[$name])) continue 2;
+                $parameterNames[$name] = true;
                 $type = $this->type($parameter['schema'] ?? [], []);
                 $required = (bool) ($parameter['required'] ?? false);
                 if (!$required && !str_contains($type, 'null')) $type = $this->union([$type, 'null']);
-                $parameters[] = $type.' $'.$name.($required ? '' : ' = null');
-            }
-            if ($invalidParameter) {
-                $parameters = ['array $arguments'];
+                $signature = $type.' $'.$name.($required ? '' : ' = null');
+                if ($required) $requiredParameters[] = $signature;
+                else $optionalParameters[] = $signature;
             }
             if (isset($operation['requestBody'])) {
                 $requestBody = $this->document->resolve($operation['requestBody']);
+                if (isset($parameterNames['body'])) continue;
                 $requestType = 'mixed';
                 foreach ($requestBody['content'] ?? [] as $media) {
                     if (isset($media['schema'])) {
@@ -60,10 +60,12 @@ final readonly class IdeStubGenerator
                 if ($requestType === '') $requestType = 'mixed';
                 $required = (bool) ($requestBody['required'] ?? false);
                 if (!$required && !str_contains($requestType, 'null')) $requestType = $this->union([$requestType, 'null']);
-                $parameters[] = $requestType.' $body'.($required ? '' : ' = null');
+                $signature = $requestType.' $body'.($required ? '' : ' = null');
+                if ($required) $requiredParameters[] = $signature;
+                else $optionalParameters[] = $signature;
             }
             $returnType = $this->responseType($operation);
-            $lines[] = ' * @method \\CommunitySDKs\\Http\\Result<'.$returnType.'> '.$id.'('.implode(', ', $parameters).'): \\CommunitySDKs\\Http\\Result<'.$returnType.'>';
+            $lines[] = ' * @method \\CommunitySDKs\\Http\\Result<'.$returnType.'> '.$id.'('.implode(', ', array_merge($requiredParameters, $optionalParameters)).')';
         }
         $lines[] = ' */';
         $lines[] = 'class '.$className.' extends \\CommunitySDKs\\Client {}';
