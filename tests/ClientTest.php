@@ -726,6 +726,49 @@ final class ClientTest extends TestCase
         }
     }
 
+    public function testResumableDownloadRejectsChangedEntityTag(): void
+    {
+        $transport = new FakeTransport(responses: [
+            new Response(206, ['Content-Range' => 'bytes 0-3/8', 'ETag' => '"v1"'], 'ABCD'),
+            new Response(206, ['Content-Range' => 'bytes 4-7/8', 'ETag' => '"v2"'], 'WXYZ'),
+        ]);
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/file' => ['get' => ['operationId' => 'file', 'responses' => ['206' => ['description' => 'partial']]]]],
+        ]), transport: $transport);
+        $target = sys_get_temp_dir().DIRECTORY_SEPARATOR.'community-sdk-resume-'.bin2hex(random_bytes(6));
+
+        try {
+            $this->expectException(SdkException::class);
+            $sdk->downloadResumable('file', $target, rangeSize: 4);
+        } finally {
+            foreach ([$target, $target.'.part', $target.'.part.json'] as $path) if (is_file($path)) unlink($path);
+        }
+    }
+
+    public function testResumableDownloadFinalizesACompletePartialAfterRestart(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/file' => ['get' => ['operationId' => 'file', 'responses' => ['206' => ['description' => 'partial']]]]],
+        ]), transport: $transport);
+        $target = sys_get_temp_dir().DIRECTORY_SEPARATOR.'community-sdk-resume-'.bin2hex(random_bytes(6));
+        $partial = $target.'.part';
+        $metadata = $partial.'.json';
+        file_put_contents($partial, 'complete');
+        file_put_contents($metadata, json_encode(['url' => hash('sha256', 'https://example.test/file'), 'total' => 8, 'etag' => '"v1"'], JSON_THROW_ON_ERROR));
+
+        try {
+            $result = $sdk->downloadResumable('file', $target, rangeSize: 4);
+            self::assertSame(206, $result->status);
+            self::assertSame('complete', file_get_contents($target));
+            self::assertSame(0, $transport->sendCount);
+        } finally {
+            foreach ([$target, $partial, $metadata] as $path) if (is_file($path)) unlink($path);
+        }
+    }
+
     public function testNamedArgumentsAndPathEncoding(): void
     {
         $transport = new FakeTransport(new Response(200, ['Content-Type'=>'application/json'], '{"id":1,"title":"Hi","body":"Text","userId":2}'));

@@ -274,6 +274,12 @@ readonly class Client
         $offset = is_file($partial) ? filesize($partial) : 0;
         if (!is_int($offset)) $offset = 0;
         $lastResult = null;
+        if (is_file($partial) && $metadata['total'] !== null && $offset === $metadata['total']) {
+            $headers = ['Content-Range' => $offset > 0 ? 'bytes 0-'.($offset - 1).'/'.$offset : 'bytes */0'];
+            if (is_string($metadata['etag'])) $headers['ETag'] = $metadata['etag'];
+            $this->finishResumableDownload($partial, $metadataPath, $target);
+            return new Result(206, $headers, null, '');
+        }
 
         while (true) {
             $headers = $request->headers;
@@ -311,6 +317,13 @@ readonly class Client
             }
             if ($metadata['total'] !== null && $metadata['total'] !== $total) {
                 throw new SdkException('Download size changed while resuming.');
+            }
+            $responseEtag = $response->header('ETag');
+            if ($offset > 0 && is_string($metadata['etag']) && $metadata['etag'] !== ''
+                && ($responseEtag === null || !hash_equals($metadata['etag'], $responseEtag))) {
+                if (is_file($partial)) unlink($partial);
+                if (is_file($metadataPath)) unlink($metadataPath);
+                throw new SdkException('Download ETag changed while resuming; the partial file was discarded.');
             }
             if ($offset === 0 && is_string($response->header('ETag'))) $metadata['etag'] = $response->header('ETag');
             $metadata['total'] = $total;
