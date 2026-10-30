@@ -7,7 +7,7 @@ use CommunitySDKs\Exception\ApiException;
 use CommunitySDKs\Exception\SdkException;
 use CommunitySDKs\Exception\ValidationException;
 use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, MultipartDecoder, PaginationStrategy, Request, Result, Response, RetryBudget, RetryingTransport, StreamTransport, StreamingTransport, Transport};
-use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, RequestBodySerializer, SecurityResolver, Validator};
+use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, RemoteReferenceLoader, RequestBodySerializer, SecurityResolver, Validator};
 use CommunitySDKs\Security\OAuthTokenProvider;
 use CommunitySDKs\Security\SecurityCredentialProvider;
 
@@ -77,9 +77,9 @@ readonly class Client
     }
 
     /** @param array<string,string> $credentials @param list<HttpMiddleware> $middleware @param list<string> $allowedHosts @param array<string,string> $serverVariables */
-    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0, array $allowedHosts = [], ?OAuthTokenProvider $oauthTokenProvider = null, array $serverVariables = [], ?SecurityCredentialProvider $credentialProvider = null, ?RetryBudget $retryBudget = null): self
+    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0, array $allowedHosts = [], ?OAuthTokenProvider $oauthTokenProvider = null, array $serverVariables = [], ?SecurityCredentialProvider $credentialProvider = null, ?RetryBudget $retryBudget = null, array $allowedRemoteRefHosts = [], ?RemoteReferenceLoader $remoteReferenceLoader = null, int $maxRemoteReferenceBytes = 1_048_576): self
     {
-        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries, allowedHosts: $allowedHosts, oauthTokenProvider: $oauthTokenProvider, serverVariables: $serverVariables, credentialProvider: $credentialProvider, retryBudget: $retryBudget);
+        return new self(Document::fromFile($file, $allowedRemoteRefHosts, $remoteReferenceLoader, $maxRemoteReferenceBytes), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries, allowedHosts: $allowedHosts, oauthTokenProvider: $oauthTokenProvider, serverVariables: $serverVariables, credentialProvider: $credentialProvider, retryBudget: $retryBudget);
     }
 
     private function validateBaseUrl(string $server): string

@@ -4,7 +4,7 @@ declare(strict_types=1);
 namespace CommunitySDKs\Tests;
 
 use CommunitySDKs\Exception\{SdkException, ValidationException};
-use CommunitySDKs\OpenApi\{Document, Validator};
+use CommunitySDKs\OpenApi\{Document, RemoteReferenceLoader, Validator};
 use PHPUnit\Framework\TestCase;
 
 final class ValidatorTest extends TestCase
@@ -112,5 +112,55 @@ final class ValidatorTest extends TestCase
 
         $this->expectException(SdkException::class);
         $validator->assert(['name' => 'x'], ['$ref' => '../../composer.json']);
+    }
+
+    public function testAllowlistedRemoteReferenceLoadsRecursivelyWithinAllowedHosts(): void
+    {
+        $loader = new class implements RemoteReferenceLoader {
+            /** @var list<string> */
+            public array $urls = [];
+            public function load(string $url, int $maxBytes): string
+            {
+                $this->urls[] = $url;
+                return match ($url) {
+                    'https://schemas.example.test/root.json' => '{"components":{"schemas":{"Envelope":{"type":"object","required":["node"],"properties":{"node":{"$ref":"https://schemas.example.test/node.json#/Node"}}}}}}',
+                    'https://schemas.example.test/node.json' => '{"Node":{"type":"object","required":["id"],"properties":{"id":{"type":"integer"},"next":{"$ref":"#/Node"}}}}',
+                    default => throw new SdkException('Unexpected test reference URL.'),
+                };
+            }
+        };
+        $document = Document::fromFile(__DIR__.'/fixtures/external-ref-api.json',
+            allowedRemoteRefHosts: ['schemas.example.test'], remoteReferenceLoader: $loader);
+
+        (new Validator($document))->assert(
+            ['node' => ['id' => 1, 'next' => ['id' => 2]]],
+            ['$ref' => 'https://schemas.example.test/root.json#/components/schemas/Envelope'],
+        );
+
+        self::assertSame(['https://schemas.example.test/root.json', 'https://schemas.example.test/node.json'], $loader->urls);
+    }
+
+    public function testRemoteReferenceRequiresAllowlistedHttpsHost(): void
+    {
+        $loader = new class implements RemoteReferenceLoader {
+            public function load(string $url, int $maxBytes): string { throw new SdkException('Loader must not be called.'); }
+        };
+        $document = Document::fromFile(__DIR__.'/fixtures/external-ref-api.json',
+            allowedRemoteRefHosts: ['schemas.example.test'], remoteReferenceLoader: $loader);
+
+        $this->expectException(SdkException::class);
+        (new Validator($document))->assert(['id' => 1], ['$ref' => 'https://evil.example.test/schema.json']);
+    }
+
+    public function testRemoteReferenceBodySizeIsEnforcedEvenForCustomLoaders(): void
+    {
+        $loader = new class implements RemoteReferenceLoader {
+            public function load(string $url, int $maxBytes): string { return str_repeat(' ', $maxBytes + 1); }
+        };
+        $document = Document::fromFile(__DIR__.'/fixtures/external-ref-api.json',
+            allowedRemoteRefHosts: ['schemas.example.test'], remoteReferenceLoader: $loader, maxRemoteReferenceBytes: 32);
+
+        $this->expectException(SdkException::class);
+        (new Validator($document))->assert(['id' => 1], ['$ref' => 'https://schemas.example.test/schema.json']);
     }
 }

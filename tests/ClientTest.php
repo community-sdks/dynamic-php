@@ -533,6 +533,26 @@ final class ClientTest extends TestCase
         self::assertSame('https://example.test/parameter?value=ok', $transport->lastRequest->url);
     }
 
+    public function testClientFromFileCanOptIntoAllowlistedRemoteResponseSchemas(): void
+    {
+        $loader = new class implements \CommunitySDKs\OpenApi\RemoteReferenceLoader {
+            public function load(string $url, int $maxBytes): string
+            {
+                return '{"type":"object","required":["id"],"properties":{"id":{"type":"integer"}}}';
+            }
+        };
+        $transport = new FakeTransport(new Response(200, ['Content-Type' => 'application/json'], '{"id":"invalid"}'));
+        $sdk = Client::fromFile(
+            __DIR__.'/fixtures/remote-ref-api.json',
+            transport: $transport,
+            allowedRemoteRefHosts: ['schemas.example.test'],
+            remoteReferenceLoader: $loader,
+        );
+
+        $this->expectException(ValidationException::class);
+        $sdk->call('getItem');
+    }
+
     public function testServerVariableDefaultsOverridesAndOperationServerPrecedence(): void
     {
         $transport = new FakeTransport();

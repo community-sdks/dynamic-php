@@ -1,0 +1,21 @@
+{
+  "openapi": "3.1.0",
+  "servers": [{"url": "https://example.test"}],
+  "paths": {
+    "/item": {
+      "get": {
+        "operationId": "getItem",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "https://schemas.example.test/item.json"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
