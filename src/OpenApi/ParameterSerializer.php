@@ -19,8 +19,12 @@ final class ParameterSerializer
         if ($mediaType === 'application/json' || str_ends_with($mediaType, '+json')) {
             return json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
         }
-        if ($mediaType === 'text/plain' && is_scalar($value)) return (string) $value;
-        throw new SdkException("Unsupported parameter content media type: {$mediaType}");
+        if ($mediaType === 'application/x-www-form-urlencoded' && is_array($value)) {
+            return http_build_query($value, '', '&', PHP_QUERY_RFC3986);
+        }
+        if ($value instanceof \CommunitySDKs\Http\Upload) return $value->contents;
+        if (is_scalar($value) || $value === null) return $this->scalar((string) $parameter['name'], $value);
+        throw new SdkException("Structured parameter content is not supported for {$mediaType}.");
     }
 
     public function contentQuery(string $name, string $value): string

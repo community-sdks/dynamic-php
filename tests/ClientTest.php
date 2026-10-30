@@ -348,6 +348,19 @@ final class ClientTest extends TestCase
         self::assertSame('daily report', $transport->lastRequest->headers['X-Label']);
     }
 
+    public function testParameterContentSupportsFormAndOpaqueScalarMediaTypes(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = $this->parameterSdk($transport, [
+            ['name' => 'filter', 'in' => 'query', 'content' => ['application/x-www-form-urlencoded' => ['schema' => ['type' => 'object']]]],
+            ['name' => 'xml', 'in' => 'query', 'content' => ['application/xml' => ['schema' => ['type' => 'string']]]],
+        ], '/items');
+
+        $sdk->inspect(...['filter' => ['name' => 'Ada Lovelace'], 'xml' => '<name>Ada</name>']);
+
+        self::assertSame('https://example.test/items?filter=name%3DAda%2520Lovelace&xml=%3Cname%3EAda%3C%2Fname%3E', $transport->lastRequest->url);
+    }
+
     public function testBooleanAndNullParametersUseOpenApiScalarRepresentations(): void
     {
         $transport = new FakeTransport();
