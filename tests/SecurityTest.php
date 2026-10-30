@@ -68,4 +68,16 @@ final class SecurityTest extends TestCase
         self::assertSame('device-token', $token);
         self::assertSame([0, 0, 5], $waits);
     }
+
+    public function testDeviceCodeFlowRejectsUntrustedVerificationUri(): void
+    {
+        $transport = new FakeTransport(new Response(200, [], '{"device_code":"device-secret","user_code":"ABCD-EFGH","verification_uri":"https://phishing.example.test/activate","expires_in":60}'));
+        $provider = new DeviceCodeTokenProvider(
+            'https://auth.example.test/device', 'https://auth.example.test/token', 'client-id',
+            $transport, ['auth.example.test'], static function (int $seconds): void {},
+        );
+
+        $this->expectException(SdkException::class);
+        $provider->begin(['items:read']);
+    }
 }

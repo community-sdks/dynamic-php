@@ -49,6 +49,10 @@ final class DeviceCodeTokenProvider implements OAuthTokenProvider
         foreach (['device_code', 'user_code', 'verification_uri'] as $required) {
             if (!is_string($payload[$required] ?? null) || $payload[$required] === '') throw new SdkException("Device authorization response is missing {$required}.");
         }
+        $this->assertAllowedHttpsUrl($payload['verification_uri']);
+        if (is_string($payload['verification_uri_complete'] ?? null)) {
+            $this->assertAllowedHttpsUrl($payload['verification_uri_complete']);
+        }
         if (!is_int($payload['expires_in'] ?? null) || $payload['expires_in'] < 1) throw new SdkException('Device authorization response has invalid expires_in.');
         $interval = is_int($payload['interval'] ?? null) && $payload['interval'] >= 0 ? $payload['interval'] : 5;
         $authorization = new DeviceAuthorization(
