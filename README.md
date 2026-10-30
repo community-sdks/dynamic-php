@@ -87,8 +87,8 @@ OpenAPI server-variable defaults are used automatically; override them with `ser
 ### Uploads, pagination and streaming
 
 ```php
-use CommunitySDKs\Http\{MetricsMiddleware, PaginationStrategy, RateLimitMiddleware, Request, Response, Upload};
-use CommunitySDKs\Security\ClientCredentialsTokenProvider;
+use CommunitySDKs\Http\{CircuitBreakerMiddleware, MetricsMiddleware, PaginationStrategy, RateLimitMiddleware, Request, Response, TokenBucketRetryBudget, Upload};
+use CommunitySDKs\Security\{AuthorizationCodeTokenProvider, ClientCredentialsTokenProvider, DeviceCodeTokenProvider};
 
 $client = new Client(
     document: Document::fromFile('specs/api.openapi.json'),
@@ -101,11 +101,13 @@ $client = new Client(
     ),
     middleware: [
         new RateLimitMiddleware(0.25),
+        new CircuitBreakerMiddleware(5, 30),
         new MetricsMiddleware(static function (Request $request, ?Response $response, float $seconds, ?Throwable $error): void {
             // Send request outcome and duration to the application's metrics backend.
         }),
     ],
     maxRetries: 2, // retries idempotent methods only
+    retryBudget: new TokenBucketRetryBudget(20, 1),
 );
 
 $upload = Upload::fromFile(__DIR__.'/photo.jpg');
@@ -176,7 +178,7 @@ vendor/bin/community-sdk ide specs/jsonplaceholder.openapi.json > CommunitySdkId
 vendor/bin/community-sdk dto specs/jsonplaceholder.openapi.json > ApiDtos.php
 ```
 
-The `ide` command emits a **PHPDoc-only subclass** of `Client`: there is still just one runtime implementation. Use that class in an application only after loading it and checking signatures. It includes nested array shapes, nullable and union types, and response-data generics; recursive or unsupported models fall back to `array<string, mixed>` or `mixed`. The optional `dto` command emits strict readonly DTO classes for object schemas; the DTOs preserve OpenAPI property names through `JsonSerializable` and do not add generic hydration. `docs` emits human/AI-readable Markdown. You can put the generated API.md in your coding assistant's project context.
+The `ide` command emits a **PHPDoc-only subclass** of `Client`: there is still just one runtime implementation. Use that class in an application only after loading it and checking signatures. It includes nested array shapes, nullable and union types, and response-data generics; recursive or unsupported models fall back to `array<string, mixed>` or `mixed`. The optional `dto` command emits strict readonly DTO classes for object schemas; it supports `allOf`, unions, and local model references, preserves OpenAPI property names through `JsonSerializable`, and does not add generic hydration. `docs` emits human/AI-readable Markdown. You can put the generated API.md in your coding assistant's project context.
 
 **Important:** do not include a generated IDE class with the same name twice in one app, and do not ship generated files as part of this core package. The example `Client` class remains the recommended production entry point.
 
@@ -202,17 +204,17 @@ All runtime operations use one `Client`, regardless of how many OpenAPI paths ex
 
 - OpenAPI 3.x JSON and YAML **local files**
 - local `#/...` and trusted sibling-file refs rooted beneath the spec directory, including recursive schemas; network refs and path escapes are rejected
-- document, path-item, and operation-level servers, server variable defaults/overrides, and optional exact-host allowlists
+- document, path-item, and operation-level absolute or relative servers, server variable defaults/overrides, and optional exact-host allowlists
 - HTTP GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS/TRACE operation registry
 - `operationId` naming (fallback generated from verb + path)
 - PHP magic `__call` and explicit `call()`
-- path, query, header and cookie parameters; `simple`, `label`, `matrix`, `form`, `spaceDelimited`, `pipeDelimited`, `deepObject`, and `allowEmptyValue`; JSON and text `Parameter Object.content`
+- path, query, header and cookie parameters; `simple`, `label`, `matrix`, `form`, `spaceDelimited`, `pipeDelimited`, `deepObject`, and `allowEmptyValue`; JSON, form-urlencoded, text, and opaque scalar `Parameter Object.content`
 - JSON, URL-encoded, multipart, and binary request bodies; `Upload` values and explicit file helpers
 - JSON and multipart response decoding, status-specific response schemas, response validation
 - JSON Schema 2020-12 validation through Opis, including recursive references, `not`, dependent schemas, formats, and `unevaluatedProperties`; OpenAPI 3.0 `nullable` and referenced `oneOf` discriminators are adapted
 - HTTP error payload/status preservation, transport exceptions
-- OpenAPI security inheritance and alternatives, API keys, HTTP Basic/Bearer, per-request credential providers, and scope-aware OAuth token providers
-- same-origin Link or caller-defined cursor pagination, chunked and resumable range downloads, SSE, idempotent retries, rate limiting, request metrics, middleware, custom transport injection
+- OpenAPI security inheritance and alternatives, API keys, HTTP Basic/Bearer, per-request credential providers, and scope-aware OAuth client-credentials, PKCE authorization-code, and device-code providers
+- same-origin Link or caller-defined cursor/item pagination, chunked and resumable range downloads, SSE, idempotent retries with retry budgets, circuit breaking, rate limiting, request metrics, middleware, custom transport injection
 - introspection, Markdown docs, nested PHPStan/PHPDoc IDE hints, optional strict DTO generation
 - deterministic tests with a fake transport, GitHub Actions
 
@@ -220,14 +222,14 @@ All runtime operations use one `Client`, regardless of how many OpenAPI paths ex
 
 **This is a deliberately scoped v0.1.0, not an OpenAPI conformance-certified SDK.** In particular:
 
-1. Supported OpenAPI and JSON Schema behavior is not complete conformance. Server URL templates are supported, but relative servers, callbacks, webhooks, parameter `content` beyond JSON/text, and every serialization edge case are not implemented.
-2. OAuth client credentials are supported, but authorization-code/device flows, scope enforcement, token revocation, and credential stores are not built in. Custom providers can implement other flows. Security validation must not be treated as authorization policy.
+1. Supported OpenAPI and JSON Schema behavior is not complete conformance. Server URLs and variables are supported, but callbacks, webhooks, every media type, and every serialization edge case are not implemented. This package is an outbound client, not a webhook server.
+2. OAuth client-credentials, authorization-code token exchange with PKCE, and device-code polling are supported. Browser redirects, `state` generation/verification, device-code UI, token revocation, and credential stores remain application responsibilities. Static tokens cannot be scope-inspected. Security validation must not be treated as authorization policy.
 3. External `$ref` is supported only for local files beneath the original spec directory; network refs and path escapes are rejected. OpenAPI discriminator adaptation supports referenced `oneOf` variants, not every discriminator shape. JSON Schema validation is runtime validation, not a security boundary; validate untrusted input separately and test custom formats/keywords.
 4. JSON and multipart media types decode to PHP values and parts; other content types remain raw strings. SSE parsing is basic. Range downloads require a server that returns valid byte ranges and stable ETags for safe resume.
-5. Link pagination follows same-origin links only. Cursor pagination needs a caller-provided strategy; automatic item deduplication is not included.
-6. Retry defaults to off and only retries idempotent HTTP methods. Metrics are callback-based. No retry budget coordination, circuit breaker, or distributed rate limit is included.
+5. Link pagination follows same-origin links only. Cursor pagination and item identity require caller-provided strategies.
+6. Retry defaults to off and only retries idempotent HTTP methods. Retry budgets and metrics are pluggable/in-memory or callback-based; no distributed rate-limit backend is bundled.
 7. Built-in redirects are disabled. Specs are loaded from local files only. Base URLs must be trusted and allow-listed by applications that accept user-controlled configuration; syntax checks alone do not prevent SSRF.
-8. DTO generation covers object component schemas with strict constructors and JSON serialization, not generic hydration or all schema compositions. IDE hints remain PHPDoc, not compile-time validation; complex recursive models can still fall back to generic array/mixed types.
+8. DTO generation covers object component schemas, `allOf`, unions, and local model refs with strict constructors and JSON serialization, not generic hydration or every schema composition. IDE hints remain PHPDoc, not compile-time validation; complex recursive models can still fall back to generic array/mixed types.
 9. Portable parameter fixtures are included, but this repository has no other SDK runtime to consume them. JSONPlaceholder's sample specification is manually maintained and may not cover all real responses.
 
 **Security:** never execute arbitrary remote specs as PHP, and don't allow untrusted users to choose API `baseUrl` or arbitrary target domains in your server application. The built-in transport disables HTTP redirects; test security boundaries before using a custom transport.
@@ -235,9 +237,9 @@ All runtime operations use one `Client`, regardless of how many OpenAPI paths ex
 ## Roadmap
 
 1. Broader OpenAPI 3.0 and 3.1 conformance and serialization edge-case coverage.
-2. Optional OAuth flow adapters, scope enforcement, and auth-aware errors.
-3. Advanced pagination strategies and richer transport observability.
-4. More precise recursive DTO model generation.
+2. OAuth authorization initiation/state utilities, token revocation, and auth-aware errors.
+3. Distributed rate-limit/retry-budget adapters and richer transport observability.
+4. More precise recursive DTO model generation and generic hydration helpers.
 5. Consume the portable fixtures in other runtimes in the Community SDKs ecosystem.
 
 No generated SDK packages are in scope.
