@@ -27,7 +27,9 @@ final readonly class DtoGenerator
         }
         $lines = ['<?php', '', 'declare(strict_types=1);', '', 'namespace '.$namespace.';', ''];
         foreach ($schemas as $schemaName => $schema) {
-            if (!is_array($schema) || (($schema['type'] ?? null) !== 'object' && !isset($schema['properties']))) continue;
+            if (!is_array($schema)) continue;
+            $schema = $this->objectSchema($schema);
+            if ($schema === null) continue;
             $className = $this->className((string) $schemaName);
             $properties = $schema['properties'] ?? [];
             if (!is_array($properties)) throw new SdkException("Schema {$schemaName} properties must be an object.");
@@ -97,6 +99,34 @@ final readonly class DtoGenerator
         if ($class === '' || ctype_digit($class[0])) $class = 'Schema'.$class;
         if (in_array(strtolower($class), self::KEYWORDS, true)) $class .= 'Schema';
         return $class;
+    }
+
+    /** @param array<string,mixed> $schema @param array<string,true> $visited @return array<string,mixed>|null */
+    private function objectSchema(array $schema, array $visited = []): ?array
+    {
+        if (isset($schema['$ref']) && is_string($schema['$ref'])) {
+            $reference = $schema['$ref'];
+            if (isset($visited[$reference])) return null;
+            $visited[$reference] = true;
+            try {
+                $schema = $this->document->resolve($schema);
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+        $properties = is_array($schema['properties'] ?? null) ? $schema['properties'] : [];
+        $required = is_array($schema['required'] ?? null) ? $schema['required'] : [];
+        foreach (is_array($schema['allOf'] ?? null) ? $schema['allOf'] : [] as $part) {
+            if (!is_array($part)) continue;
+            $resolvedPart = $this->objectSchema($part, $visited);
+            if ($resolvedPart === null) continue;
+            $properties = array_replace($properties, $resolvedPart['properties'] ?? []);
+            $required = array_values(array_unique(array_merge($required, $resolvedPart['required'] ?? [])));
+        }
+        if (($schema['type'] ?? null) !== 'object' && $properties === [] && !isset($schema['allOf'])) return null;
+        $schema['properties'] = $properties;
+        $schema['required'] = $required;
+        return $schema;
     }
 
     private function propertyName(string $name): string
