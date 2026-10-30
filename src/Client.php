@@ -521,6 +521,30 @@ readonly class Client
         }
     }
 
+    /** @param array<string,mixed> $arguments @param callable(Result):iterable<mixed> $items @param callable(mixed):int|float|string $identity @return iterable<mixed> */
+    public function paginateItems(
+        string $operationId,
+        callable $items,
+        callable $identity,
+        array $arguments = [],
+        ?PaginationStrategy $strategy = null,
+        int $maxPages = 1000,
+    ): iterable {
+        $seen = [];
+        foreach ($this->paginate($operationId, $arguments, $strategy, $maxPages) as $page) {
+            foreach ($items($page) as $item) {
+                $key = $identity($item);
+                if (!is_int($key) && !is_float($key) && !is_string($key)) {
+                    throw new SdkException('Pagination item identity must be a scalar key.');
+                }
+                $normalizedKey = get_debug_type($key).':'.(string) $key;
+                if (isset($seen[$normalizedKey])) continue;
+                $seen[$normalizedKey] = true;
+                yield $item;
+            }
+        }
+    }
+
     /** @param array<string,mixed> $operation */
     private function resultFor(array $operation, Response $response): Result
     {

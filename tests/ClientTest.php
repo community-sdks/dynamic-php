@@ -5,7 +5,7 @@ namespace CommunitySDKs\Tests;
 
 use CommunitySDKs\Client;
 use CommunitySDKs\Exception\{ApiException, SdkException, ValidationException};
-use CommunitySDKs\Http\{HttpMiddleware, MetricsMiddleware, MiddlewareTransport, PaginationStrategy, Request, Response, Upload};
+use CommunitySDKs\Http\{HttpMiddleware, MetricsMiddleware, MiddlewareTransport, PaginationStrategy, Request, Response, Result, Upload};
 use CommunitySDKs\OpenApi\Registry;
 use CommunitySDKs\Security\OAuthTokenProvider;
 use CommunitySDKs\Security\SecurityCredentialProvider;
@@ -265,6 +265,26 @@ final class ClientTest extends TestCase
         } catch (SdkException) {
             self::assertSame(1, $transport->sendCount);
         }
+    }
+
+    public function testPaginateItemsDeduplicatesByCallerIdentity(): void
+    {
+        $transport = new FakeTransport(responses: [
+            new Response(200, ['Content-Type' => 'application/json', 'Link' => '<https://example.test/items?page=2>; rel="next"'], '[{"id":1},{"id":2}]'),
+            new Response(200, ['Content-Type' => 'application/json'], '[{"id":2},{"id":3}]'),
+        ]);
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://example.test']],
+            'paths' => ['/items' => ['get' => ['operationId' => 'listItems', 'responses' => ['200' => ['description' => 'ok']]]]],
+        ]), transport: $transport);
+
+        $items = iterator_to_array($sdk->paginateItems(
+            'listItems',
+            static fn (Result $page): array => $page->data,
+            static fn (array $item): int => $item['id'],
+        ));
+
+        self::assertSame([['id' => 1], ['id' => 2], ['id' => 3]], array_values($items));
     }
 
     public function testPaginationResolvesQueryRelativeLinksAndPreservesApiKey(): void
