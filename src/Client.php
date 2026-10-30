@@ -6,7 +6,7 @@ namespace CommunitySDKs;
 use CommunitySDKs\Exception\ApiException;
 use CommunitySDKs\Exception\SdkException;
 use CommunitySDKs\Exception\ValidationException;
-use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, MultipartDecoder, PaginationStrategy, Request, Result, Response, RetryingTransport, StreamTransport, StreamingTransport, Transport};
+use CommunitySDKs\Http\{HttpMiddleware, MiddlewareTransport, MultipartDecoder, PaginationStrategy, Request, Result, Response, RetryBudget, RetryingTransport, StreamTransport, StreamingTransport, Transport};
 use CommunitySDKs\OpenApi\{Document, ParameterSerializer, Registry, RequestBodySerializer, SecurityResolver, Validator};
 use CommunitySDKs\Security\OAuthTokenProvider;
 use CommunitySDKs\Security\SecurityCredentialProvider;
@@ -38,6 +38,7 @@ readonly class Client
         /** @var list<HttpMiddleware> */
         array $middleware = [],
         int $maxRetries = 0,
+        private ?RetryBudget $retryBudget = null,
         /** @var list<string> exact lowercased or case-insensitive allowed hostnames */
         private array $allowedHosts = [],
         private ?OAuthTokenProvider $oauthTokenProvider = null,
@@ -54,7 +55,7 @@ readonly class Client
         $configuredTransport = $transport ?? new StreamTransport();
         if ($middleware !== []) $configuredTransport = new MiddlewareTransport($configuredTransport, $middleware);
         $this->streamingTransport = $configuredTransport instanceof StreamingTransport ? $configuredTransport : null;
-        if ($maxRetries > 0) $configuredTransport = new RetryingTransport($configuredTransport, $maxRetries);
+        if ($maxRetries > 0) $configuredTransport = new RetryingTransport($configuredTransport, $maxRetries, retryBudget: $retryBudget);
         $this->transport = $configuredTransport;
         $this->baseUrlOverride = $baseUrl === null ? null : $this->validateBaseUrl($baseUrl);
         $serverList = $document->data['servers'] ?? [];
@@ -76,9 +77,9 @@ readonly class Client
     }
 
     /** @param array<string,string> $credentials @param list<HttpMiddleware> $middleware @param list<string> $allowedHosts @param array<string,string> $serverVariables */
-    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0, array $allowedHosts = [], ?OAuthTokenProvider $oauthTokenProvider = null, array $serverVariables = [], ?SecurityCredentialProvider $credentialProvider = null): self
+    public static function fromFile(string $file, ?string $baseUrl = null, ?Transport $transport = null, ?string $token = null, array $credentials = [], array $middleware = [], int $maxRetries = 0, array $allowedHosts = [], ?OAuthTokenProvider $oauthTokenProvider = null, array $serverVariables = [], ?SecurityCredentialProvider $credentialProvider = null, ?RetryBudget $retryBudget = null): self
     {
-        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries, allowedHosts: $allowedHosts, oauthTokenProvider: $oauthTokenProvider, serverVariables: $serverVariables, credentialProvider: $credentialProvider);
+        return new self(Document::fromFile($file), $baseUrl, $transport, $token, credentials: $credentials, middleware: $middleware, maxRetries: $maxRetries, allowedHosts: $allowedHosts, oauthTokenProvider: $oauthTokenProvider, serverVariables: $serverVariables, credentialProvider: $credentialProvider, retryBudget: $retryBudget);
     }
 
     private function validateBaseUrl(string $server): string

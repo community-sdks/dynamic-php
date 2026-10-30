@@ -4,8 +4,8 @@ declare(strict_types=1);
 namespace CommunitySDKs\Tests;
 
 use CommunitySDKs\Client;
-use CommunitySDKs\Exception\{ApiException, SdkException, ValidationException};
-use CommunitySDKs\Http\{HttpMiddleware, MetricsMiddleware, MiddlewareTransport, PaginationStrategy, Request, Response, Result, Upload};
+use CommunitySDKs\Exception\{ApiException, SdkException, TransportException, ValidationException};
+use CommunitySDKs\Http\{CircuitBreakerMiddleware, HttpMiddleware, MetricsMiddleware, MiddlewareTransport, PaginationStrategy, Request, Response, Result, TokenBucketRetryBudget, Upload};
 use CommunitySDKs\OpenApi\Registry;
 use CommunitySDKs\Security\OAuthTokenProvider;
 use CommunitySDKs\Security\SecurityCredentialProvider;
@@ -620,6 +620,40 @@ final class ClientTest extends TestCase
 
         self::assertSame(200, $result->status);
         self::assertSame(2, $transport->sendCount);
+    }
+
+    public function testRetryBudgetCapsRetriesAcrossAnOperation(): void
+    {
+        $transport = new FakeTransport(responses: [
+            new Response(503, ['Retry-After' => '0']),
+            new Response(503, ['Retry-After' => '0']),
+            new Response(200, ['Content-Type' => 'application/json'], '{"id":1,"title":"Hi","body":"Text","userId":2}'),
+        ]);
+        $sdk = new Client(
+            Document::fromFile(dirname(__DIR__).'/specs/jsonplaceholder.openapi.json'),
+            transport: $transport,
+            maxRetries: 2,
+            retryBudget: new TokenBucketRetryBudget(1, 0),
+        );
+
+        try {
+            $sdk->getPost(id: 1);
+            self::fail('Expected the retry budget to stop a second retry.');
+        } catch (ApiException $e) {
+            self::assertSame(503, $e->status);
+            self::assertSame(2, $transport->sendCount);
+        }
+    }
+
+    public function testCircuitBreakerOpensAfterThresholdFailures(): void
+    {
+        $inner = new FakeTransport(new Response(503));
+        $transport = new MiddlewareTransport($inner, [new CircuitBreakerMiddleware(2, 60)]);
+        $transport->send(new Request('GET', 'https://example.test/'));
+        $transport->send(new Request('GET', 'https://example.test/'));
+
+        $this->expectException(TransportException::class);
+        $transport->send(new Request('GET', 'https://example.test/'));
     }
 
     public function testDoesNotRetryNonIdempotentPostByDefault(): void

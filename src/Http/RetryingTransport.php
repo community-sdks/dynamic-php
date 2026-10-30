@@ -15,6 +15,7 @@ final readonly class RetryingTransport implements Transport
         private float $maxDelaySeconds = 5.0,
         private array $retryStatuses = [429, 502, 503, 504],
         private array $retryMethods = ['GET', 'HEAD', 'OPTIONS', 'TRACE', 'PUT', 'DELETE'],
+        private ?RetryBudget $retryBudget = null,
     ) {
         if ($maxRetries < 0 || !is_finite($baseDelaySeconds) || !is_finite($maxDelaySeconds) || $baseDelaySeconds < 0 || $maxDelaySeconds < 0) {
             throw new \InvalidArgumentException('Retry settings must be non-negative and finite.');
@@ -29,10 +30,12 @@ final readonly class RetryingTransport implements Transport
                 $response = $this->inner->send($request);
             } catch (TransportException $e) {
                 if ($attempt >= $retries) throw $e;
+                if ($this->retryBudget !== null && !$this->retryBudget->consume()) throw $e;
                 $this->pause($attempt);
                 continue;
             }
             if ($attempt >= $retries || !in_array($response->status, $this->retryStatuses, true)) return $response;
+            if ($this->retryBudget !== null && !$this->retryBudget->consume()) return $response;
             $this->pause($attempt, $response->header('Retry-After'));
         }
     }
