@@ -21,15 +21,6 @@ A small, readable OpenAPI-driven HTTP client that resolves `operationId` at runt
 
 Publish this folder as a GitHub repository, then install it via Composer once available from Packagist:
 
-```bash
-composer require community-sdks/dynamic-php
-```
-
-Before publishing, to try it locally:
-
-```bash
-composer install
-php examples/jsonplaceholder.php
 composer test
 composer analyse
 ```
