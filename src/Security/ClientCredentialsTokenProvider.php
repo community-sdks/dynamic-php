@@ -82,6 +82,12 @@ final class ClientCredentialsTokenProvider implements OAuthTokenProvider
         }
         $tokenType = strtolower((string) ($payload['token_type'] ?? 'bearer'));
         if ($tokenType !== 'bearer') throw new SdkException('OAuth token response uses an unsupported token type.');
+        $grantedScopes = is_string($payload['scope'] ?? null)
+            ? (preg_split('/\s+/', trim($payload['scope']), -1, PREG_SPLIT_NO_EMPTY) ?: [])
+            : $scopes;
+        if (array_diff($scopes, $grantedScopes) !== []) {
+            throw new SdkException('OAuth token response does not grant all requested scopes.');
+        }
         if (is_numeric($payload['expires_in'] ?? null)) {
             $lifetime = max(0, (int) $payload['expires_in'] - $this->expiryLeewaySeconds);
             $this->cache[$cacheKey] = ['token' => $payload['access_token'], 'expiresAt' => time() + $lifetime];

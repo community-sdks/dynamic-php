@@ -35,6 +35,17 @@ final class SecurityTest extends TestCase
         );
     }
 
+    public function testClientCredentialsProviderRejectsInsufficientGrantedScopes(): void
+    {
+        $transport = new FakeTransport(new Response(200, [], '{"access_token":"under-scoped","scope":"items:read"}'));
+        $provider = new ClientCredentialsTokenProvider(
+            'https://auth.example.test/token', 'client-id', 'client-secret', $transport, ['auth.example.test'],
+        );
+
+        $this->expectException(SdkException::class);
+        $provider->accessToken('oauth', ['items:read', 'profile:read']);
+    }
+
     public function testDeviceCodeFlowHandlesPendingAndSlowDown(): void
     {
         $transport = new FakeTransport(responses: [

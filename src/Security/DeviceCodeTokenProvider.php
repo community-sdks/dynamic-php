@@ -86,10 +86,10 @@ final class DeviceCodeTokenProvider implements OAuthTokenProvider
                 $payload = $this->jsonObject($response->body, 'OAuth token endpoint');
                 if (!is_string($payload['access_token'] ?? null) || $payload['access_token'] === '') throw new SdkException('OAuth token response is missing an access_token.');
                 if (strtolower((string) ($payload['token_type'] ?? 'bearer')) !== 'bearer') throw new SdkException('OAuth token response uses an unsupported token type.');
-                if (is_string($payload['scope'] ?? null)) {
-                    $grantedScopes = preg_split('/\s+/', trim($payload['scope']), -1, PREG_SPLIT_NO_EMPTY) ?: [];
-                    if (array_diff($scopes, $grantedScopes) !== []) throw new SdkException('OAuth token response does not grant all requested scopes.');
-                }
+                $grantedScopes = is_string($payload['scope'] ?? null)
+                    ? (preg_split('/\s+/', trim($payload['scope']), -1, PREG_SPLIT_NO_EMPTY) ?: [])
+                    : $scopes;
+                if (array_diff($scopes, $grantedScopes) !== []) throw new SdkException('OAuth token response does not grant all requested scopes.');
                 $expiresAt = is_numeric($payload['expires_in'] ?? null)
                     ? time() + max(0, (int) $payload['expires_in'] - $this->expiryLeewaySeconds)
                     : time();
