@@ -123,7 +123,7 @@ final class ValidatorTest extends TestCase
             {
                 $this->urls[] = $url;
                 return match ($url) {
-                    'https://schemas.example.test/root.json' => '{"components":{"schemas":{"Envelope":{"type":"object","required":["node"],"properties":{"node":{"$ref":"https://schemas.example.test/node.json#/Node"}}}}}}',
+                    'https://schemas.example.test/root.json' => '{"components":{"schemas":{"Envelope":{"type":"object","required":["node"],"properties":{"node":{"$ref":"node.json#/Node"}}}}}}',
                     'https://schemas.example.test/node.json' => '{"Node":{"type":"object","required":["id"],"properties":{"id":{"type":"integer"},"next":{"$ref":"#/Node"}}}}',
                     default => throw new SdkException('Unexpected test reference URL.'),
                 };
@@ -138,6 +138,24 @@ final class ValidatorTest extends TestCase
         );
 
         self::assertSame(['https://schemas.example.test/root.json', 'https://schemas.example.test/node.json'], $loader->urls);
+    }
+
+    public function testRemoteDocumentsCannotChainReferencesToUnapprovedHosts(): void
+    {
+        $loader = new class implements RemoteReferenceLoader {
+            /** @var list<string> */
+            public array $urls = [];
+            public function load(string $url, int $maxBytes): string
+            {
+                $this->urls[] = $url;
+                return '{"properties":{"external":{"$ref":"https://evil.example.test/schema.json"}}}';
+            }
+        };
+        $document = Document::fromFile(__DIR__.'/fixtures/external-ref-api.json',
+            allowedRemoteRefHosts: ['schemas.example.test'], remoteReferenceLoader: $loader);
+
+        $this->expectException(SdkException::class);
+        (new Validator($document))->assert(['external' => []], ['$ref' => 'https://schemas.example.test/root.json']);
     }
 
     public function testRemoteReferenceRequiresAllowlistedHttpsHost(): void
