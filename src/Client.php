@@ -57,20 +57,19 @@ readonly class Client
         if ($maxRetries > 0) $configuredTransport = new RetryingTransport($configuredTransport, $maxRetries);
         $this->transport = $configuredTransport;
         $this->baseUrlOverride = $baseUrl === null ? null : $this->validateBaseUrl($baseUrl);
-        $server = $this->baseUrlOverride;
-        if ($server === null) {
-            $serverList = $document->data['servers'] ?? [];
-            $serverDefinition = is_array($serverList[0] ?? null) ? $serverList[0] : null;
-            if ($serverDefinition === null) {
-                foreach ($this->registry->all() as $operation) {
-                    if (is_array($operation['_servers'][0] ?? null)) {
-                        $serverDefinition = $operation['_servers'][0];
-                        break;
-                    }
+        $serverList = $document->data['servers'] ?? [];
+        $serverDefinition = is_array($serverList[0] ?? null) ? $serverList[0] : null;
+        if ($serverDefinition === null) {
+            foreach ($this->registry->all() as $operation) {
+                if (is_array($operation['_servers'][0] ?? null)) {
+                    $serverDefinition = $operation['_servers'][0];
+                    break;
                 }
             }
-            if ($serverDefinition !== null) $server = $this->serverUrl($serverDefinition);
         }
+        $server = $serverDefinition === null
+            ? $this->baseUrlOverride
+            : $this->initialServerUrl($serverDefinition);
         if ($server === null) throw new SdkException('Provide an absolute HTTP(S) base URL.');
         if ($maxRetries < 0) throw new \InvalidArgumentException('maxRetries must be non-negative.');
         $this->baseUrl = rtrim($this->validateBaseUrl($server), '/');
@@ -97,7 +96,7 @@ readonly class Client
     }
 
     /** @param array<string,mixed> $server */
-    private function serverUrl(array $server): string
+    private function serverUrl(array $server, ?string $relativeBase = null): string
     {
         $url = $server['url'] ?? null;
         if (!is_string($url)) throw new SdkException('OpenAPI server URL must be a string.');
@@ -116,15 +115,52 @@ readonly class Client
             }
         }
         if (str_contains($url, '{') || str_contains($url, '}')) throw new SdkException('Unresolved OpenAPI server variable.');
+        if (!preg_match('~^https?://~i', $url)) {
+            $relativeBase ??= $this->baseUrlOverride;
+            if ($relativeBase === null) throw new SdkException('Relative OpenAPI server URLs require a trusted absolute baseUrl or an absolute document server.');
+            $baseParts = parse_url($relativeBase);
+            if (!is_array($baseParts) || !isset($baseParts['scheme'], $baseParts['host'])) throw new SdkException('Cannot resolve relative server URL.');
+            $origin = strtolower($baseParts['scheme']).'://'.strtolower($baseParts['host']).(isset($baseParts['port']) ? ':'.$baseParts['port'] : '');
+            if (str_starts_with($url, '/')) {
+                $url = $origin.$url;
+            } else {
+                $basePath = $baseParts['path'] ?? '/';
+                $directory = str_ends_with($basePath, '/') ? $basePath : substr($basePath, 0, (int) strrpos($basePath, '/') + 1);
+                $segments = [];
+                foreach (explode('/', $directory.$url) as $segment) {
+                    if ($segment === '' || $segment === '.') continue;
+                    if ($segment === '..') array_pop($segments);
+                    else $segments[] = $segment;
+                }
+                $url = $origin.'/'.implode('/', $segments);
+            }
+        }
         return $this->validateBaseUrl($url);
     }
 
     /** @param array<string,mixed> $operation */
     private function baseUrlForOperation(array $operation): string
     {
-        if ($this->baseUrlOverride !== null) return $this->baseUrlOverride;
         $servers = $operation['_servers'] ?? [];
-        return is_array($servers) && is_array($servers[0] ?? null) ? $this->serverUrl($servers[0]) : $this->baseUrl;
+        if (is_array($servers) && is_array($servers[0] ?? null)) {
+            $server = $servers[0];
+            $url = $server['url'] ?? '';
+            if ($this->baseUrlOverride !== null && is_string($url) && preg_match('~^https?://~i', $url) === 1) {
+                return $this->baseUrlOverride;
+            }
+            return $this->serverUrl($server, $this->baseUrlOverride ?? $this->baseUrl);
+        }
+        return $this->baseUrlOverride ?? $this->baseUrl;
+    }
+
+    /** @param array<string,mixed> $server */
+    private function initialServerUrl(array $server): string
+    {
+        $url = $server['url'] ?? null;
+        if ($this->baseUrlOverride !== null && is_string($url) && preg_match('~^https?://~i', $url) === 1) {
+            return $this->baseUrlOverride;
+        }
+        return $this->serverUrl($server, $this->baseUrlOverride);
     }
 
     public function operations(): Registry { return $this->registry; }

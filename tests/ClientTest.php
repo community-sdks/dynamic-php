@@ -540,6 +540,30 @@ final class ClientTest extends TestCase
         $sdk->private();
     }
 
+    public function testRelativeOperationServerResolvesAgainstConfiguredBaseUrl(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => 'https://api.example.test/root/']],
+            'paths' => ['/items' => ['get' => [
+                'operationId' => 'listItems', 'servers' => [['url' => '../v2']],
+                'responses' => ['200' => ['description' => 'ok']],
+            ]]],
+        ]), baseUrl: 'https://api.example.test/root/', transport: $transport, allowedHosts: ['api.example.test']);
+
+        $sdk->listItems();
+
+        self::assertSame('https://api.example.test/v2/items', $transport->lastRequest->url);
+    }
+
+    public function testRelativeDocumentServerRequiresAnAbsoluteBaseUrl(): void
+    {
+        $this->expectException(SdkException::class);
+        new Client(new Document([
+            'openapi' => '3.1.0', 'servers' => [['url' => '/api/v1']], 'paths' => [],
+        ]));
+    }
+
     public function testPaginationRejectsCrossOriginNextLink(): void
     {
         $transport = new FakeTransport(new Response(200, ['Link' => '<https://other.example.test/items?page=2>; rel="next"'], '[]'));
