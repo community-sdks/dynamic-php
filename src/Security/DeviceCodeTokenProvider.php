@@ -12,7 +12,7 @@ final class DeviceCodeTokenProvider implements OAuthTokenProvider
     /** @var array<string,array{authorization:DeviceAuthorization,scopes:list<string>,startedAt:int,interval:int}> */
     private array $devices = [];
 
-    /** @var array<string,array{token:string,expiresAt:int}> */
+    /** @var array<string,array{token:string,refreshToken:?string,expiresAt:int}> */
     private array $tokens = [];
 
     /** @var Closure(int):void */
@@ -76,6 +76,31 @@ final class DeviceCodeTokenProvider implements OAuthTokenProvider
         $key = $this->scopeKey($scopes);
         $cached = $this->tokens[$key] ?? null;
         if ($cached !== null && $cached['expiresAt'] > time()) return $cached['token'];
+        if ($cached !== null && $cached['refreshToken'] !== null) {
+            $response = $this->sendForm($this->tokenUrl, [
+                'grant_type' => 'refresh_token',
+                'refresh_token' => $cached['refreshToken'],
+                'client_id' => $this->clientId,
+            ]);
+            if ($response->status < 200 || $response->status >= 300) {
+                unset($this->tokens[$key]);
+                throw new SdkException("OAuth refresh endpoint returned HTTP {$response->status}.");
+            }
+            $payload = $this->jsonObject($response->body, 'OAuth refresh endpoint');
+            if (!is_string($payload['access_token'] ?? null) || $payload['access_token'] === '') {
+                throw new SdkException('OAuth refresh response is missing an access_token.');
+            }
+            $grantedScopes = is_string($payload['scope'] ?? null)
+                ? (preg_split('/\s+/', trim($payload['scope']), -1, PREG_SPLIT_NO_EMPTY) ?: [])
+                : $scopes;
+            if (array_diff($scopes, $grantedScopes) !== []) throw new SdkException('OAuth refresh response does not grant all requested scopes.');
+            $refreshToken = is_string($payload['refresh_token'] ?? null) ? $payload['refresh_token'] : $cached['refreshToken'];
+            $expiresAt = is_numeric($payload['expires_in'] ?? null)
+                ? time() + max(0, (int) $payload['expires_in'] - $this->expiryLeewaySeconds)
+                : time();
+            $this->tokens[$key] = ['token' => $payload['access_token'], 'refreshToken' => $refreshToken, 'expiresAt' => $expiresAt];
+            return $payload['access_token'];
+        }
         $device = $this->devices[$key] ?? null;
         if ($device === null) throw new SdkException("Call begin() and complete device authorization for {$schemeName} first.");
 
@@ -97,7 +122,8 @@ final class DeviceCodeTokenProvider implements OAuthTokenProvider
                 $expiresAt = is_numeric($payload['expires_in'] ?? null)
                     ? time() + max(0, (int) $payload['expires_in'] - $this->expiryLeewaySeconds)
                     : time();
-                $this->tokens[$key] = ['token' => $payload['access_token'], 'expiresAt' => $expiresAt];
+                $refreshToken = is_string($payload['refresh_token'] ?? null) ? $payload['refresh_token'] : null;
+                $this->tokens[$key] = ['token' => $payload['access_token'], 'refreshToken' => $refreshToken, 'expiresAt' => $expiresAt];
                 unset($this->devices[$key]);
                 return $payload['access_token'];
             }

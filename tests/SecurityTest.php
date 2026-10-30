@@ -80,4 +80,23 @@ final class SecurityTest extends TestCase
         $this->expectException(SdkException::class);
         $provider->begin(['items:read']);
     }
+
+    public function testDeviceCodeTokenRefreshesWithoutRepeatingAuthorization(): void
+    {
+        $transport = new FakeTransport(responses: [
+            new Response(200, [], '{"device_code":"device-secret","user_code":"ABCD-EFGH","verification_uri":"https://auth.example.test/activate","expires_in":60,"interval":0}'),
+            new Response(200, [], '{"access_token":"first","refresh_token":"refresh-me","expires_in":0,"scope":"items:read"}'),
+            new Response(200, [], '{"access_token":"refreshed","expires_in":3600,"scope":"items:read"}'),
+        ]);
+        $provider = new DeviceCodeTokenProvider(
+            'https://auth.example.test/device', 'https://auth.example.test/token', 'client-id',
+            $transport, ['auth.example.test'], static function (int $seconds): void {}, 0,
+        );
+
+        $provider->begin(['items:read']);
+        self::assertSame('first', $provider->accessToken('device-oauth', ['items:read']));
+        self::assertSame('refreshed', $provider->accessToken('device-oauth', ['items:read']));
+        self::assertSame(3, $transport->sendCount);
+        self::assertStringContainsString('grant_type=refresh_token&refresh_token=refresh-me', $transport->lastRequest->body);
+    }
 }
